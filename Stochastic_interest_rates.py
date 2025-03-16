@@ -105,29 +105,5 @@ yc.interpolate_bond_prices(interpolation_method="Linear")
 yc.interpolate_bond_prices(interpolation_method="PCHIP")
 
 
-# TIME_ARRAY = np.arange(60, 10950, 50)
-# # yc.interpolated_bond_curve['Linear'](TIME_ARRAY)
-#
-# rates = [-np.log(yc.interpolated_bond_curve['Linear'](t))*(365/t) for t in TIME_ARRAY]
-# rates_2 = [-np.log(yc.interpolated_bond_curve['PCHIP'](t))*(365/t) for t in TIME_ARRAY]
-# # rates = [-np.log(yc.interpolated_bond_curve['Linear'](t)) for t in TIME_ARRAY]
-# rates_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Rates": rates})
-# rates_df_2 = pd.DataFrame({"Tenor": TIME_ARRAY, "Rates": rates_2})
-#
-#
-# plt.figure(figsize=(10, 5))
-# # sns.scatterplot(data=yc.bond_prices, x="Tenor", y="Bond Price", color="red", label="Original Data", s=80)
-# sns.lineplot(data=rates_df, x="Tenor", y="Rates", color="blue", label="Linear Interpolation")
-# sns.lineplot(data=rates_df_2, x="Tenor", y="Rates", color="red", label="PCHIP Interpolation")
-#
-#
-# plt.xlabel("Tenor (Years)")
-# plt.ylabel("Rate")
-# plt.title("titel")
-# plt.legend()
-# plt.grid(True)
-#
-# plt.show()
-
 
 
