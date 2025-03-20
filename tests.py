@@ -11,7 +11,7 @@ import seaborn as sns
 TIME_ARRAY = np.arange(60, 10950, 50)
 
 #Market rates Data:
-path =  r"D:\Python\Pycharm\Stochastic Interest Rates\US_Treasury_Bonds_Live.csv"  # r"E:\PythonProjects\Stochastic Interest Rates\US_Treasury_Bonds_Live.csv"
+path =  r"E:\PythonProjects\Stochastic Interest Rates\Stochastic_Interest_Rates\US_Treasury_Bonds_Live.csv"
 
 market_data = pd.read_csv(path)
 print(market_data)
@@ -29,12 +29,12 @@ print(yc.bond_prices["Tenor"].values)
 # print(yc.bond_prices["Bond Price"])
 
 # Linear Interpolation
-print("#----------LINEAR----------#")
-yc.interpolate_bond_prices("Linear")
-yc.interpolated_bond_curve["Linear"] = np.vectorize(yc.interpolated_bond_curve["Linear"])
-rates_lin = [-np.log(yc.interpolated_bond_curve['Linear'](t))*(365/t) for t in TIME_ARRAY]
+print("#----------Cubic Spline----------#")
+yc.interpolate_bond_prices("Cubic Spline")
+yc.interpolated_bond_curve["Cubic Spline"] = np.vectorize(yc.interpolated_bond_curve["Cubic Spline"])
+rates_lin = [-np.log(yc.interpolated_bond_curve['Cubic Spline'](t))*(365/t) for t in TIME_ARRAY]
 
-Lin_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Bond Price": yc.interpolated_bond_curve["Linear"](TIME_ARRAY),
+Lin_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Bond Price": yc.interpolated_bond_curve["Cubic Spline"](TIME_ARRAY),
                        "Rates": rates_lin})
 print(Lin_df)
 
@@ -61,13 +61,13 @@ print(CH_Spline_df)
 # Plot
 plt.figure(figsize=(10, 5))
 # sns.scatterplot(data=yc.bond_prices, x="Tenor", y="Bond Price", color="red", label="Original Data", s=80)
-sns.lineplot(data=Lin_df, x="Tenor", y="Rates", color="red", label="Linear Interpolation")
-sns.lineplot(data=PCHIP_df, x="Tenor", y="Rates", color="green", label="PCHIP Interpolation")
-sns.lineplot(data=CH_Spline_df, x="Tenor", y="Rates", color="blue", label="CH Spline Interpolation")
+sns.lineplot(data=Lin_df, x="Tenor", y="Bond Price", color="red", label="Cubic Spline Interpolation")
+sns.lineplot(data=PCHIP_df, x="Tenor", y="Bond Price", color="green", label="PCHIP Interpolation")
+sns.lineplot(data=CH_Spline_df, x="Tenor", y="Bond Price", color="blue", label="CH Spline Interpolation")
 
 plt.xlabel("Tenor (Years)")
-plt.ylabel("Rates")
-plt.title("Rates Interpolation")
+plt.ylabel("Bond Price")
+plt.title("Bond Price Interpolation")
 plt.legend()
 plt.grid(True)
 

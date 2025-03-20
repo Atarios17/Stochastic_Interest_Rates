@@ -5,10 +5,14 @@ import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+
 # scipy.integrate usage:
 def f(x):
-    return x**2
-scipy.integrate.quad(f,0,1)
+    return x ** 2
+
+
+scipy.integrate.quad(f, 0, 1)
+
 
 # Hull White One Factor: dr = (eta - gamma * r)dt + sqrt(beta)dW
 # sqrt(beta) -> beta is a variance of r
@@ -17,62 +21,50 @@ scipy.integrate.quad(f,0,1)
 
 class yield_curve:
     def __init__(self):
-        self.market_rates = pd.DataFrame([], columns = ['Tenor', 'Rate']) # [r1,r2,..., rn]
-        self.bond_prices = pd.DataFrame([], columns = ['Tenor', 'Bond Price']) # [Z1,Z2,..., Zn]
-        self.interpolated_bond_curve = {} # {"Hermite": Z*(t), "Linear": Z*(t)}
-        self.model_parameters = {} # {"Hull-White":{"Hermite":[eta,gamma,sigma],"Linear":[eta,gamma,sigma]},"Lee":{"Hermite":[a,b],"Linear":[a,b]}}
+        self.market_rates = pd.DataFrame([], columns=['Tenor', 'Rate'])  # [r1,r2,..., rn]
+        self.bond_prices = pd.DataFrame([], columns=['Tenor', 'Bond Price'])  # [Z1,Z2,..., Zn]
+        self.interpolated_bond_curve = {}  # {"Hermite": Z*(t), "Linear": Z*(t)}
+        self.model_parameters = {}  # {"Hull-White":{"Hermite":[eta,gamma,sigma],"Linear":[eta,gamma,sigma]},"Lee":{"Hermite":[a,b],"Linear":[a,b]}}
 
     def read_market_data(self, market_data_path):
-        #for .csv
-        self.market_rates = pd.read_csv(market_data_path)#,index_col=['Tenor', 'Rate'])
+        # for .csv
+        self.market_rates = pd.read_csv(market_data_path)  # ,index_col=['Tenor', 'Rate'])
 
     def calculate_bond_prices(self):
         if len(self.market_rates) == 0:
             raise AssertionError('market_rates table is empty! Please use .read_market_data() first to populate it')
 
         self.bond_prices['Tenor'] = self.market_rates['Tenor']
-        self.bond_prices['Bond Price'] = np.exp(-self.market_rates['Rate']/100 * self.market_rates['Tenor'] / 365)
+        self.bond_prices['Bond Price'] = np.exp(-self.market_rates['Rate'] / 100 * self.market_rates['Tenor'] / 365)
 
-    def interpolate_bond_prices(self, interpolation_method = "Linear"):
+    def interpolate_bond_prices(self, interpolation_method="Cubic Spline"):
 
-        supported_interpolation_methods = ["Linear", "PCHIP", "CH Spline"]
+        supported_interpolation_methods = ["Cubic Spline", "PCHIP", "CH Spline"]
 
         if interpolation_method not in supported_interpolation_methods:
-            raise ValueError(f'Inputted interpolation method is not supported. Please use any of the following ones: {str(supported_interpolation_methods)[1:-1]}')
+            raise ValueError(
+                f'Inputted interpolation method is not supported. Please use any of the following ones: {str(supported_interpolation_methods)[1:-1]}')
 
         if len(self.bond_prices) == 0:
             raise AssertionError('bond_prices table is empty! Please use .calculate_bond_prices() first to populate it')
 
-        if interpolation_method == "Linear": # Piecewise Linear
-            params = pd.DataFrame([np.polyfit(self.bond_prices['Tenor'].values[i:(i + 2)],
-                                              self.bond_prices['Bond Price'].values[i:(i + 2)], 1) for i in
-                                              range(len(self.bond_prices) - 1)], columns=['a', 'b'])
-
-            def f(t):
-                if t < min(self.bond_prices['Tenor']):
-                    return np.exp(-self.market_rates['Rate'][0] * t / 365)
-                elif t > max(self.bond_prices['Tenor']):
-                    a, b = params.iloc[-1, :].values
-                    return max(a * t + b, 0)
-                else:
-                    wanted_row = max(np.where(t > self.bond_prices['Tenor'].values)[0])
-                    a, b = params.iloc[wanted_row, :].values
-                    return a * t + b
-
-            # print(params)
-
-            self.interpolated_bond_curve[interpolation_method] = f
-
-        if interpolation_method == "PCHIP": # Piecewise Cubic Hermite Interpolation
-            interpolator = scipy.interpolate.PchipInterpolator(self.bond_prices['Tenor'].values, self.bond_prices['Bond Price'].values)
+        if interpolation_method == "Cubic Spline":  # Piecewise Cubic Hermite Interpolation
+            interpolator = scipy.interpolate.CubicSpline(self.bond_prices['Tenor'].values,
+                                                         self.bond_prices['Bond Price'].values)
 
             self.interpolated_bond_curve[interpolation_method] = interpolator
 
-        if interpolation_method == "CH Spline": # Cubic Hermite Spline
+        if interpolation_method == "PCHIP":  # Piecewise Cubic Hermite Interpolation
+            interpolator = scipy.interpolate.PchipInterpolator(self.bond_prices['Tenor'].values,
+                                                               self.bond_prices['Bond Price'].values)
 
-            m = np.diff(self.bond_prices["Bond Price"]) / np.diff(self.bond_prices["Tenor"])    # slopes
+            self.interpolated_bond_curve[interpolation_method] = interpolator
+
+        if interpolation_method == "CH Spline":  # Cubic Hermite Spline
+
+            m = np.diff(self.bond_prices["Bond Price"]) / np.diff(self.bond_prices["Tenor"])  # slopes
             dy = np.zeros_like(self.bond_prices["Bond Price"])
-            dy[1:-1] = (m[:-1] + m[1:]) / 2                                                     # interior points
+            dy[1:-1] = (m[:-1] + m[1:]) / 2  # interior points
             dy[0] = m[0]
             dy[-1] = m[-1]
 
@@ -83,51 +75,15 @@ class yield_curve:
 
             self.interpolated_bond_curve[interpolation_method] = f
 
-def bond_rates_to_prices(market_rates):
-    return np.exp(-market_rates['Rate'].values/100 * market_rates['Tenor'].values / 365)
+    def _calibrate(self, interpolation_method, gamma, alpha, sigma):
 
-#Market rates Data:
-path = r"D:\Python\Pycharm\Stochastic Interest Rates\US_Treasury_Bonds_Live.csv"
+        def eta(t):
+            index = min(np.where(t < self.bond_prices['Tenor'].values)[0])
+            T = self.bond_prices["Tenor"][index]
 
-# Create object
-yc = yield_curve()
+            return (-self.interpolated_bond_curve[interpolation_method].derivative(2)(t) - self.interpolated_bond_curve[
+                interpolation_method].derivative(1)(t)
+                    + (sigma ** 2 / 2 * alpha) * (1 - np.exp(-2 * alpha * (T - t))))
 
-# Read market rates
-yc.read_market_data(path)
-#yc.market_rates
-
-# Calculate Bond prices
-yc.calculate_bond_prices()
-#yc.bond_prices
-
-# Interpolate bond prices
-yc.interpolate_bond_prices(interpolation_method="Linear")
-yc.interpolate_bond_prices(interpolation_method="PCHIP")
-
-
-# TIME_ARRAY = np.arange(60, 10950, 50)
-# # yc.interpolated_bond_curve['Linear'](TIME_ARRAY)
-#
-# rates = [-np.log(yc.interpolated_bond_curve['Linear'](t))*(365/t) for t in TIME_ARRAY]
-# rates_2 = [-np.log(yc.interpolated_bond_curve['PCHIP'](t))*(365/t) for t in TIME_ARRAY]
-# # rates = [-np.log(yc.interpolated_bond_curve['Linear'](t)) for t in TIME_ARRAY]
-# rates_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Rates": rates})
-# rates_df_2 = pd.DataFrame({"Tenor": TIME_ARRAY, "Rates": rates_2})
-#
-#
-# plt.figure(figsize=(10, 5))
-# # sns.scatterplot(data=yc.bond_prices, x="Tenor", y="Bond Price", color="red", label="Original Data", s=80)
-# sns.lineplot(data=rates_df, x="Tenor", y="Rates", color="blue", label="Linear Interpolation")
-# sns.lineplot(data=rates_df_2, x="Tenor", y="Rates", color="red", label="PCHIP Interpolation")
-#
-#
-# plt.xlabel("Tenor (Years)")
-# plt.ylabel("Rate")
-# plt.title("titel")
-# plt.legend()
-# plt.grid(True)
-#
-# plt.show()
-
-
+        self.model_parameters[interpolation_method] = [eta, gamma, sigma]
 
