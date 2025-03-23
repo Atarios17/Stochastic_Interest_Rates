@@ -49,16 +49,16 @@ class yield_curve:
             raise AssertionError('bond_prices table is empty! Please use .calculate_bond_prices() first to populate it')
 
         if interpolation_method == "Cubic Spline":  # Piecewise Cubic Hermite Interpolation
-            interpolator = scipy.interpolate.CubicSpline(self.bond_prices['Tenor'].values,
+            cubicsplnie = scipy.interpolate.CubicSpline(self.bond_prices['Tenor'].values,
                                                          self.bond_prices['Bond Price'].values)
 
-            self.interpolated_bond_curve[interpolation_method] = interpolator
+            self.interpolated_bond_curve[interpolation_method] = cubicsplnie
 
         if interpolation_method == "PCHIP":  # Piecewise Cubic Hermite Interpolation
-            interpolator = scipy.interpolate.PchipInterpolator(self.bond_prices['Tenor'].values,
+            pchip = scipy.interpolate.PchipInterpolator(self.bond_prices['Tenor'].values,
                                                                self.bond_prices['Bond Price'].values)
 
-            self.interpolated_bond_curve[interpolation_method] = interpolator
+            self.interpolated_bond_curve[interpolation_method] = pchip
 
         if interpolation_method == "CH Spline":  # Cubic Hermite Spline
 
@@ -68,12 +68,9 @@ class yield_curve:
             dy[0] = m[0]
             dy[-1] = m[-1]
 
-            spline = scipy.interpolate.CubicHermiteSpline(self.bond_prices["Tenor"], self.bond_prices["Bond Price"], dy)
+            chspline = scipy.interpolate.CubicHermiteSpline(self.bond_prices["Tenor"], self.bond_prices["Bond Price"], dy)
 
-            def f(t):
-                return spline(t)
-
-            self.interpolated_bond_curve[interpolation_method] = f
+            self.interpolated_bond_curve[interpolation_method] = chspline
 
     def _calibrate(self, interpolation_method, gamma, alpha, sigma):
 
@@ -81,9 +78,10 @@ class yield_curve:
             index = min(np.where(t < self.bond_prices['Tenor'].values)[0])
             T = self.bond_prices["Tenor"][index]
 
-            return (-self.interpolated_bond_curve[interpolation_method].derivative(2)(t) - self.interpolated_bond_curve[
-                interpolation_method].derivative(1)(t)
-                    + (sigma ** 2 / 2 * alpha) * (1 - np.exp(-2 * alpha * (T - t))))
+            dev_1 = self.interpolated_bond_curve[interpolation_method].derivative(1)
+            dev_2 = self.interpolated_bond_curve[interpolation_method].derivative(2)
+
+            return -dev_2(t) - alpha*dev_1(t) + (sigma ** 2 / 2 * alpha) * (1 - np.exp(-2 * alpha * (T - t)))
 
         self.model_parameters[interpolation_method] = [eta, gamma, sigma]
 
