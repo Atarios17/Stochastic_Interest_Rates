@@ -1,3 +1,5 @@
+from scipy.differentiate import derivative
+
 from Stochastic_interest_rates import yield_curve
 import pandas as pd
 import numpy as np
@@ -24,14 +26,11 @@ yc.read_market_data(path)
 
 # Calculate bond prices
 yc.calculate_bond_prices()
+print(type(yc.bond_prices['Tenor'].values))
 
-print(yc.bond_prices["Tenor"].values)
-# print(yc.bond_prices["Bond Price"])
-
-# Linear Interpolation
+# Cubic Spline Interpolation
 print("#----------Cubic Spline----------#")
 yc.interpolate_bond_prices("Cubic Spline")
-yc.interpolated_bond_curve["Cubic Spline"] = np.vectorize(yc.interpolated_bond_curve["Cubic Spline"])
 rates_lin = [-np.log(yc.interpolated_bond_curve['Cubic Spline'](t))*(365/t) for t in TIME_ARRAY]
 
 Lin_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Bond Price": yc.interpolated_bond_curve["Cubic Spline"](TIME_ARRAY),
@@ -51,12 +50,21 @@ print(PCHIP_df)
 print("#----------CH Spline----------#")
 
 yc.interpolate_bond_prices("CH Spline")
-yc.interpolated_bond_curve["CH Spline"] = np.vectorize(yc.interpolated_bond_curve["CH Spline"])
 rates_ch = [-np.log(yc.interpolated_bond_curve['CH Spline'](t))*(365/t) for t in TIME_ARRAY]
 
 CH_Spline_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Bond Price": yc.interpolated_bond_curve["CH Spline"](TIME_ARRAY),
                              "Rates": rates_ch})
 print(CH_Spline_df)
+
+# eta function values
+print("Type test")
+yc._calibrate("Cubic Spline", 1, 1,1)
+yc._calibrate("PCHIP", 1, 1,1)
+yc._calibrate("CH Spline", 1, 1,1)
+
+print(yc.model_parameters["Cubic Spline"][0](120))
+print(yc.model_parameters["PCHIP"][0](120))
+print(yc.model_parameters["CH Spline"][0](120))
 
 # Plot
 plt.figure(figsize=(10, 5))
