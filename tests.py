@@ -31,11 +31,11 @@ print(type(yc.bond_prices['Tenor'].values))
 # Cubic Spline Interpolation
 print("#----------Cubic Spline----------#")
 yc.interpolate_bond_prices("Cubic Spline")
-rates_lin = [-np.log(yc.interpolated_bond_curve['Cubic Spline'](t))*(365/t) for t in TIME_ARRAY]
+rates_cubic = [-np.log(yc.interpolated_bond_curve['Cubic Spline'](t))*(365/t) for t in TIME_ARRAY]
 
-Lin_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Bond Price": yc.interpolated_bond_curve["Cubic Spline"](TIME_ARRAY),
-                       "Rates": rates_lin})
-print(Lin_df)
+Cubic_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Bond Price": yc.interpolated_bond_curve["Cubic Spline"](TIME_ARRAY),
+                       "Rates": rates_cubic})
+print(Cubic_df)
 
 # PCHIP Interpolation
 print("#----------PCHIP----------#")
@@ -46,37 +46,33 @@ PCHIP_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Bond Price": yc.interpolated_bond
                          "Rates": rates_pchip})
 print(PCHIP_df)
 
-# CH Spline Interpolation
-print("#----------CH Spline----------#")
 
-yc.interpolate_bond_prices("CH Spline")
-rates_ch = [-np.log(yc.interpolated_bond_curve['CH Spline'](t))*(365/t) for t in TIME_ARRAY]
+# # eta function values
+# print("Type test")
+# yc._calibrate("Cubic Spline", 1, 1,1)
+# yc._calibrate("PCHIP", 1, 1,1)
+#
+# print(yc.model_parameters["Cubic Spline"][0](120))
+# print(yc.model_parameters["PCHIP"][0](120))
+#
+# # Plot
+# plt.figure(figsize=(10, 5))
+# # sns.scatterplot(data=yc.bond_prices, x="Tenor", y="Bond Price", color="red", label="Original Data", s=80)
+# sns.lineplot(data=Cubic_df, x="Tenor", y="Bond Price", color="red", label="Cubic Spline Interpolation")
+# sns.lineplot(data=PCHIP_df, x="Tenor", y="Bond Price", color="green", label="PCHIP Interpolation")
+#
+# plt.xlabel("Tenor (Years)")
+# plt.ylabel("Bond Price")
+# plt.title("Bond Price Interpolation")
+# plt.legend()
+# plt.grid(True)
+#
+# plt.show()
 
-CH_Spline_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Bond Price": yc.interpolated_bond_curve["CH Spline"](TIME_ARRAY),
-                             "Rates": rates_ch})
-print(CH_Spline_df)
+# Bond Option Price
 
-# eta function values
-print("Type test")
-yc._calibrate("Cubic Spline", 1, 1,1)
-yc._calibrate("PCHIP", 1, 1,1)
-yc._calibrate("CH Spline", 1, 1,1)
+print("#----------Cubic Spline----------#")
+print(yc.bond_option_price("Cubic Spline", 1, 1, 0.5, 4600, 5200))
 
-print(yc.model_parameters["Cubic Spline"][0](120))
-print(yc.model_parameters["PCHIP"][0](120))
-print(yc.model_parameters["CH Spline"][0](120))
-
-# Plot
-plt.figure(figsize=(10, 5))
-# sns.scatterplot(data=yc.bond_prices, x="Tenor", y="Bond Price", color="red", label="Original Data", s=80)
-sns.lineplot(data=Lin_df, x="Tenor", y="Bond Price", color="red", label="Cubic Spline Interpolation")
-sns.lineplot(data=PCHIP_df, x="Tenor", y="Bond Price", color="green", label="PCHIP Interpolation")
-sns.lineplot(data=CH_Spline_df, x="Tenor", y="Bond Price", color="blue", label="CH Spline Interpolation")
-
-plt.xlabel("Tenor (Years)")
-plt.ylabel("Bond Price")
-plt.title("Bond Price Interpolation")
-plt.legend()
-plt.grid(True)
-
-plt.show()
+print("#----------PCHIP----------#")
+print(yc.bond_option_price("PCHIP", 1, 1, 0.5, 4600, 5200))
