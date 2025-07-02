@@ -78,14 +78,14 @@ print(Linear_df)
 # plt.close()
 
 # Bond Option Price
-print("#----------Cubic Spline----------#")
-print(bond_option_price_HW1F(K = 0.045, opt_mat = 10, bond_len = 12, bond_curve = yc.discount_curve["Cubic Spline"], alpha = 0.07, sigma = 0.02))
-
-print("#----------PCHIP----------#")
-print(bond_option_price_HW1F(K = 0.045, opt_mat = 10, bond_len = 12, bond_curve = yc.discount_curve["PCHIP"], alpha = 0.07, sigma = 0.02))
-
-print("#----------Linear----------#")
-print(bond_option_price_HW1F(K = 0.045, opt_mat = 10, bond_len = 12, bond_curve = yc.discount_curve["Linear"], alpha = 0.07, sigma = 0.02))
+# print("#----------Cubic Spline----------#")
+# print(bond_option_price_HW1F(K = 0.045, opt_mat = 10, bond_len = 12, bond_curve = yc.discount_curve["Cubic Spline"], alpha = 0.07, sigma = 0.02))
+#
+# print("#----------PCHIP----------#")
+# print(bond_option_price_HW1F(K = 0.045, opt_mat = 10, bond_len = 12, bond_curve = yc.discount_curve["PCHIP"], alpha = 0.07, sigma = 0.02))
+#
+# print("#----------Linear----------#")
+# print(bond_option_price_HW1F(K = 0.045, opt_mat = 10, bond_len = 12, bond_curve = yc.discount_curve["Linear"], alpha = 0.07, sigma = 0.02))
 
 
 # Read Bond Option Market Data
@@ -95,4 +95,12 @@ bond_options_md = read_bond_options_market_data(r"Market_Data\Bond_Options_20250
 print("#----------PCHIP----------#")
 bond_options_md["Price"] = bond_option_price_HW1F(bond_options_md['Strike'].values,bond_options_md['Option_Maturity_Y'].values,bond_options_md['Bond_Length_Y'].values,yc.discount_curve["PCHIP"],alpha = 0.07, sigma = 0.02)
 yc.calibrate_term_structure_model(bond_options_md)
-print(yc.model_parameters["Hull-White-1F"])
+print(yc.model_parameters["Hull-White-1F"]["PCHIP"])
+
+# Jamshidian swaption price
+print("#----------Jamshidian----------#")
+# print(f'HW bond price {bond_price_HW1F(yc, 0, 2, 0.03)}')
+K = yc.discount_curve["Cubic Spline"](10) # sum(np.array([yc.discount_curve["Cubic Spline"](t) for t in np.arange(0.5, 10.5, 0.5)]))
+print(f'K value: {K}')
+print(f'Swaption price: {jamshidian_swaption_price(yc.yield_curve["PCHIP"], 10, 1, K, 1, 1, alpha = 0.07, sigma = 0.02)}')
+print(f'Bond option price: {bond_option_price_HW1F(K, opt_mat = 10, bond_len = 1, yield_curve = yc.yield_curve["PCHIP"], alpha = 0.07, sigma = 0.02)}')
