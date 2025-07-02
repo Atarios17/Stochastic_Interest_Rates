@@ -72,9 +72,32 @@ def swaption_price_black_model(K,vol,opt_mat,swap_len,swap_freq,bond_curve):
 
 swaption_price_black_model = np.vectorize(swaption_price_black_model)
 
-def bond_option_price_HW1F(K, opt_mat, bond_len, bond_curve, alpha, sigma):
-    p1 = bond_curve(opt_mat)
-    p2 = bond_curve(opt_mat + bond_len)
+def bond_price_HW1F_iter(r_t, r_T, t, T, alpha, sigma):
+    """This function prices bond using Hull-White bond price formula: A(t, T) * np.exp(-B(t, T) * r)."""
+
+    # A and B functions for Hull-White bond price formula
+    B = (1 - np.exp(-alpha * (T - t))) / alpha
+    A = np.exp((r_t - sigma ** 2 / (2 * alpha ** 2)) * (B - (T - t)) - (sigma ** 2 / (4 * alpha)) * B ** 2)
+
+    return A * np.exp(-B * r_T)
+
+bond_price_HW1F_iter = np.vectorize(bond_price_HW1F_iter)
+
+def bond_price_HW1F(yield_curve, t, T, alpha, sigma):
+    """This function prices bond using Hull-White bond price formula: A(t, T) * np.exp(-B(t, T) * r)."""
+
+    # A and B functions for Hull-White bond price formula
+    B = (1 - np.exp(-alpha * (T - t))) / alpha
+    A = np.exp((yield_curve(t) - sigma ** 2 / (2 * alpha ** 2)) * (B - (T - t)) - (sigma ** 2 / (4 * alpha)) * B ** 2)
+
+    return A * np.exp(-B * yield_curve(T))
+
+bond_price_HW1F = np.vectorize(bond_price_HW1F)
+
+def bond_option_price_HW1F(K, opt_mat, bond_len, yield_curve, alpha, sigma):
+
+    p1 = bond_price_HW1F(yield_curve, 0, opt_mat, alpha, sigma)
+    p2 = bond_price_HW1F(yield_curve, 0, opt_mat + bond_len, alpha, sigma)
 
     Sigma2 = sigma ** 2 / (2 * alpha ** 3) * (1 - np.exp(-2 * alpha * opt_mat)) * (1 - np.exp(-alpha * (bond_len))) ** 2
 
@@ -84,6 +107,31 @@ def bond_option_price_HW1F(K, opt_mat, bond_len, bond_curve, alpha, sigma):
     return p2 * scipy.stats.norm.cdf(d1) - K * p1 * scipy.stats.norm.cdf(d2)
 
 bond_option_price_HW1F = np.vectorize(bond_option_price_HW1F)
+
+def jamshidian_swaption_price(yield_curve, option_mat, swap_len, K, delta, notional, alpha, sigma):
+    """This function prices a European call option on a swap (in the Hull-White one-factor model) using so called Jamshidian trick."""
+
+    # delta = time step
+    payment_times = np.arange(option_mat+delta, option_mat+delta+swap_len, delta)
+
+    # looking for r_star
+    def mean_fit(r_T):
+        return sum(delta * bond_price_HW1F_iter(yield_curve(0), r_T, option_mat, payment_times, alpha, sigma) - K)**2
+
+    # We eed to pass "initial guess" values.
+    sol = scipy.optimize.minimize(mean_fit, yield_curve(0))
+    # r_star = sol.root
+    #
+    # sol = scipy.optimize.root_scalar(lambda r_T: sum(delta * bond_price_HW1F_iter(yield_curve(0), r_T,option_mat, payment_times, alpha, sigma) - K), bracket=[0.01, 0.15], method='brentq')
+    r_star = sol.x[0]
+
+    print(f"r_star = {r_star:.2f}")
+
+    K_i = bond_price_HW1F_iter(yield_curve(0), r_star, option_mat, payment_times, alpha, sigma)
+    bond_call_prices = bond_option_price_HW1F(K_i, option_mat, payment_times, yield_curve, alpha, sigma)
+    swaption_price = sum(delta * bond_call_prices) * notional
+
+    return  swaption_price
 
 class yield_curve:
     def __init__(self):
