@@ -288,7 +288,7 @@ class yield_curve:
 
             # then derivatives of logarithms:
             dlogZ_dt = lambda t: dZ_dt(t)/self.discount_curve[bond_curve_interpolation](t)
-            dlogZ_dt2 = lambda t: (dZ_dt2(t)-dlogZ_dt(t))/self.discount_curve[bond_curve_interpolation](t)
+            dlogZ_dt2 = lambda t: (Z(t)*dZ_dt2(t) - dZ_dt(t)**2) / (Z(t)**2)
 
             # and we can express theta using the derivatives and alpha + sigma parameters:
             def theta_star(t):
