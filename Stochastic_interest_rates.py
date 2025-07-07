@@ -72,9 +72,22 @@ def swaption_price_black_model(K,vol,opt_mat,swap_len,swap_freq,bond_curve):
 
 swaption_price_black_model = np.vectorize(swaption_price_black_model)
 
-def bond_option_price_HW1F(K, opt_mat, bond_len, bond_curve, alpha, sigma):
-    p1 = bond_curve(opt_mat)
-    p2 = bond_curve(opt_mat + bond_len)
+# Attention: r_t = yc.forward_rate(t,t+1/12,"PCHIP")
+def bond_price_HW1F(discount_curve, r_t, t, T, alpha):
+    """This function prices bond using Hull-White bond price formula: np.exp(A(t, T) - B(t, T) * r)."""
+
+    # A and B functions for Hull-White bond price formula
+    B = (1 - np.exp(-alpha * (T - t))) / alpha
+    A = np.log(discount_curve(T)) + r_t * B
+
+    return np.exp(A - r_t*B)
+
+bond_price_HW1F = np.vectorize(bond_price_HW1F)
+
+def bond_option_price_HW1F(K, opt_mat, bond_len, discount_curve, alpha, sigma, r_t):
+
+    p1 = bond_price_HW1F(discount_curve = discount_curve, t = 0, T = opt_mat, alpha = alpha, r_t = r_t)
+    p2 = bond_price_HW1F(discount_curve = discount_curve, t = 0, T = opt_mat + bond_len, alpha= alpha, r_t = r_t)
 
     Sigma2 = sigma ** 2 / (2 * alpha ** 3) * (1 - np.exp(-2 * alpha * opt_mat)) * (1 - np.exp(-alpha * (bond_len))) ** 2
 
@@ -84,6 +97,32 @@ def bond_option_price_HW1F(K, opt_mat, bond_len, bond_curve, alpha, sigma):
     return p2 * scipy.stats.norm.cdf(d1) - K * p1 * scipy.stats.norm.cdf(d2)
 
 bond_option_price_HW1F = np.vectorize(bond_option_price_HW1F)
+
+# r_t = forward_rate (t, t+1/12, "PCHIP")
+def jamshidian_swaption_price(discount_curve, option_mat, swap_len, K, delta, notional, alpha, sigma, r_t):
+    """This function prices a European call option on a swap (in the Hull-White one-factor model) using so called Jamshidian trick."""
+
+    # delta = time step
+    payment_times = np.arange(option_mat+delta, option_mat+delta+swap_len, delta)
+
+    # looking for r_star
+    def mean_fit(r_star):
+        return sum(delta * bond_price_HW1F(discount_curve = discount_curve, r_t = r_star, t = option_mat, T = payment_times, alpha = alpha) - K)**2
+
+    # We need to pass "initial guess" values, so we conclude r discounting from option maturity to 0
+    # and pass it as initial guess:
+    #discount_curve(option_mat)  = exp(-r*option_mat) => r = -np.log(discount_curve(option_mat))/option_mat
+    sol = scipy.optimize.minimize(mean_fit, -np.log(discount_curve(option_mat))/option_mat)
+    r_star = sol.x[0]
+
+    print(f"r_star = {r_star:.2f}")
+    print(f"fir error = {sol.fun:.2f} , <- we would like to to be 0.")
+
+    K_i = bond_price_HW1F(discount_curve = discount_curve, r_t = r_star, t = option_mat, T = payment_times, alpha = alpha)
+
+    bond_call_prices = bond_option_price_HW1F(K = K_i, opt_mat = option_mat, bond_len = payment_times, discount_curve = discount_curve, alpha = alpha, sigma = sigma, r_t = r_t)
+
+    return sum(delta * bond_call_prices) * notional
 
 class yield_curve:
     def __init__(self):
@@ -219,9 +258,12 @@ class yield_curve:
             # 1-factor Hull White Model has three parameters to calibrate: function theta(t) and constants alpha and sigma.
 
             #Now we can fit alpha and sigma to market prices of chosen derivative instrument (example swaptions, bond options or bond future options)
+            forward_rates = np.array([self.forward_rate(T, T + 1 / 12, bond_curve_interpolation) for T in options_market_data['Option_Maturity_Y'].values])
             def mean_fit(params):
                 alpha, sigma = params
-                pred = bond_option_price_HW1F(options_market_data["Strike"].values, options_market_data["Option_Maturity_Y"].values, options_market_data["Bond_Length_Y"].values, self.discount_curve[bond_curve_interpolation], alpha, sigma)
+                pred = bond_option_price_HW1F(K = options_market_data["Strike"].values, opt_mat = options_market_data["Option_Maturity_Y"].values,
+                                              bond_len = options_market_data["Bond_Length_Y"].values, discount_curve = self.discount_curve[bond_curve_interpolation],
+                                              alpha = alpha, sigma = sigma, r_t = forward_rates)
                 return np.mean((pred - options_market_data["Price"]) ** 2)
 
             # We eed to pass "initial guess" values.
@@ -239,20 +281,35 @@ class yield_curve:
             # d^2log(Z_star)/dt^2 =  -1/Z_star^2 * dZ_star/dt + 1/Z_star * d^2Z_star/dt^2 =
             # = - 1/Z_star * dlog(Z_star)/dt + 1/Z_star * d^2Z_star/dt^2 =
             # = ( d^2Z_star/dt^2 - dlog(Z_star)/dt ) / Z_star
-
+            Z = self.discount_curve[bond_curve_interpolation]
             # Start with assignment of dZ_star/dt and d^2Z_star/dt^2:
             dZ_dt = self.discount_curve[bond_curve_interpolation].derivative(1)
             dZ_dt2 = self.discount_curve[bond_curve_interpolation].derivative(2)
 
             # then derivatives of logarithms:
             dlogZ_dt = lambda t: dZ_dt(t)/self.discount_curve[bond_curve_interpolation](t)
-            dlogZ_dt2 = lambda t: (dZ_dt2-dlogZ_dt(t))/self.discount_curve[bond_curve_interpolation](t)
+            dlogZ_dt2 = lambda t: (Z(t)*dZ_dt2(t) - dZ_dt(t)**2) / (Z(t)**2)
 
             # and we can express theta using the derivatives and alpha + sigma parameters:
-            def theta_star(t):
-                return -dlogZ_dt2(t) - alpha * dlogZ_dt(t) + 0.5 * sigma**2/alpha * (1 - np.exp(-2 * alpha * t))
+            #def theta_star(t):
+            #    return -dlogZ_dt2(t) - alpha * dlogZ_dt(t) + 0.5 * sigma**2/alpha * (1 - np.exp(-2 * alpha * t))
+            def f(t):
+                h = 1e-5
+                return - (np.log(Z(t + h)) - np.log(Z(t - h))) / (2 * h)
 
-            calibrated_params = [theta_star, alpha, sigma]
+            # df/dt
+            def dfdt(t):
+                h = 1e-5
+                return (f(t + h) - f(t - h)) / (2 * h)
+
+            # Theta(t)
+            def theta(t):
+                term1 = dfdt(t)  # git
+                term2 = alpha * f(t)
+                term3 = (sigma ** 2) / (2 * alpha) * (1 - np.exp(-2 * alpha * t))
+                return term1 + term2 + term3
+
+            calibrated_params = [theta, alpha, sigma]
 
         # Add chosen term structure model to dictionary of calibrated models (if not present yet):
         if model not in self.model_parameters.keys():
