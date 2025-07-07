@@ -281,7 +281,7 @@ class yield_curve:
             # d^2log(Z_star)/dt^2 =  -1/Z_star^2 * dZ_star/dt + 1/Z_star * d^2Z_star/dt^2 =
             # = - 1/Z_star * dlog(Z_star)/dt + 1/Z_star * d^2Z_star/dt^2 =
             # = ( d^2Z_star/dt^2 - dlog(Z_star)/dt ) / Z_star
-
+            Z = self.discount_curve[bond_curve_interpolation]
             # Start with assignment of dZ_star/dt and d^2Z_star/dt^2:
             dZ_dt = self.discount_curve[bond_curve_interpolation].derivative(1)
             dZ_dt2 = self.discount_curve[bond_curve_interpolation].derivative(2)
@@ -291,10 +291,25 @@ class yield_curve:
             dlogZ_dt2 = lambda t: (Z(t)*dZ_dt2(t) - dZ_dt(t)**2) / (Z(t)**2)
 
             # and we can express theta using the derivatives and alpha + sigma parameters:
-            def theta_star(t):
-                return -dlogZ_dt2(t) - alpha * dlogZ_dt(t) + 0.5 * sigma**2/alpha * (1 - np.exp(-2 * alpha * t))
+            #def theta_star(t):
+            #    return -dlogZ_dt2(t) - alpha * dlogZ_dt(t) + 0.5 * sigma**2/alpha * (1 - np.exp(-2 * alpha * t))
+            def f(t):
+                h = 1e-5
+                return - (np.log(Z(t + h)) - np.log(Z(t - h))) / (2 * h)
 
-            calibrated_params = [theta_star, alpha, sigma]
+            # df/dt
+            def dfdt(t):
+                h = 1e-5
+                return (f(t + h) - f(t - h)) / (2 * h)
+
+            # Theta(t)
+            def theta(t):
+                term1 = dfdt(t)  # git
+                term2 = alpha * f(t)
+                term3 = (sigma ** 2) / (2 * alpha) * (1 - np.exp(-2 * alpha * t))
+                return term1 + term2 + term3
+
+            calibrated_params = [theta, alpha, sigma]
 
         # Add chosen term structure model to dictionary of calibrated models (if not present yet):
         if model not in self.model_parameters.keys():
