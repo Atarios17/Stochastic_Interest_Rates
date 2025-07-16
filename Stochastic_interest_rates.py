@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import scipy
+import QuantLib as ql
 
 tenor_years_map = pd.DataFrame([["1M" , 1/12],
                                 ["1.5M", 0.125],
@@ -60,7 +61,7 @@ def read_bond_options_market_data(path):
 #     if t == 1: return 0.97
 #     elif t == 2: return 0.93
 #     elif t == 3: return 0.88
-#
+#2
 # #vol,K,T1,T2,swap_freq = 0.2, 0.05, 1, 3,1
 
 def swaption_price_black_model(K,vol,opt_mat,swap_len,swap_freq,bond_curve):
@@ -73,56 +74,79 @@ def swaption_price_black_model(K,vol,opt_mat,swap_len,swap_freq,bond_curve):
 swaption_price_black_model = np.vectorize(swaption_price_black_model)
 
 # Attention: r_t = yc.forward_rate(t,t+1/12,"PCHIP")
-def bond_price_HW1F(discount_curve, r_t, t, T, alpha):
+def bond_price_HW1F(discount_curve, r_t, t, T, alpha): #TODO: It must be deleted or replaced with bond_price_HW1F_iter
     """This function prices bond using Hull-White bond price formula: np.exp(A(t, T) - B(t, T) * r)."""
 
     # A and B functions for Hull-White bond price formula
     B = (1 - np.exp(-alpha * (T - t))) / alpha
-    A = np.log(discount_curve(T)) + r_t * B
+    A = np.log(discount_curve(T-t)) + r_t * B
 
     return np.exp(A - r_t*B)
 
 bond_price_HW1F = np.vectorize(bond_price_HW1F)
 
-def bond_option_price_HW1F(K, opt_mat, bond_len, discount_curve, alpha, sigma, r_t):
+# r_t and alpha are used only if we want to use r_t not matching market
+def bond_price_HW1F_iter(discount_curve, t, T, alpha, r_t = None):
+    """This function prices bond using Hull-White bond price formula: np.exp(A(t, T) - B(t, T) * r)."""
+    if r_t is None:
+        return discount_curve(T)/discount_curve(t)
 
-    p1 = bond_price_HW1F(discount_curve = discount_curve, t = 0, T = opt_mat, alpha = alpha, r_t = r_t)
-    p2 = bond_price_HW1F(discount_curve = discount_curve, t = 0, T = opt_mat + bond_len, alpha= alpha, r_t = r_t)
+    market_r_t = (discount_curve(t) / discount_curve(t + 0.0001) - 1) / 0.0001
+
+    # A and B functions for Hull-White bond price formula
+    B = (1 - np.exp(-alpha * (T - t))) / alpha
+    A = np.log(discount_curve(T)/discount_curve(t)) + market_r_t * B
+
+    return np.exp(A - r_t * B)
+
+bond_price_HW1F_iter = np.vectorize(bond_price_HW1F_iter)
+
+def bond_option_price_HW1F(K, opt_mat, bond_len, discount_curve, alpha, sigma, is_call = True,r_t = None):
+
+    p1 = bond_price_HW1F_iter(discount_curve = discount_curve, t = 0, T = opt_mat, alpha = alpha, r_t = r_t)
+    p2 = bond_price_HW1F_iter(discount_curve = discount_curve, t = 0, T = opt_mat + bond_len, alpha= alpha, r_t = r_t)
 
     Sigma2 = sigma ** 2 / (2 * alpha ** 3) * (1 - np.exp(-2 * alpha * opt_mat)) * (1 - np.exp(-alpha * (bond_len))) ** 2
 
     d2 = (np.log(p2 / (K * p1)) - Sigma2 / 2) / np.sqrt(Sigma2)
     d1 = d2 + np.sqrt(Sigma2)
 
-    return p2 * scipy.stats.norm.cdf(d1) - K * p1 * scipy.stats.norm.cdf(d2)
+    if is_call:
+        return p2 * scipy.stats.norm.cdf(d1) - K * p1 * scipy.stats.norm.cdf(d2)
+
+    else :
+        return K * p1 * scipy.stats.norm.cdf(-d2) - p2 * scipy.stats.norm.cdf(-d1)
 
 bond_option_price_HW1F = np.vectorize(bond_option_price_HW1F)
 
 # r_t = forward_rate (t, t+1/12, "PCHIP")
-def jamshidian_swaption_price(discount_curve, option_mat, swap_len, K, delta, notional, alpha, sigma, r_t):
+def jamshidian_swaption_price(discount_curve, option_mat, swap_len, strike_fixed_rate, delta, notional, alpha, sigma,
+                              is_payer=False):
     """This function prices a European call option on a swap (in the Hull-White one-factor model) using so called Jamshidian trick."""
 
-    # delta = time step
-    payment_times = np.arange(option_mat+delta, option_mat+delta+swap_len, delta)
+    # delta = swap payment frequency
+    payment_times = np.arange(option_mat + delta, option_mat + delta + swap_len, delta)
 
     # looking for r_star
     def mean_fit(r_star):
-        return sum(delta * bond_price_HW1F(discount_curve = discount_curve, r_t = r_star, t = option_mat, T = payment_times, alpha = alpha) - K)**2
+        return (sum([bond_price_HW1F_iter(discount_curve, option_mat, option_mat + t, alpha,r_t=r_star) * strike_fixed_rate * delta
+                     for t in np.arange(delta, swap_len + delta, delta)]) + bond_price_HW1F_iter(discount_curve, option_mat,option_mat + swap_len, alpha,r_t=r_star) - 1) ** 2
 
-    # We need to pass "initial guess" values, so we conclude r discounting from option maturity to 0
-    # and pass it as initial guess:
-    #discount_curve(option_mat)  = exp(-r*option_mat) => r = -np.log(discount_curve(option_mat))/option_mat
-    sol = scipy.optimize.minimize(mean_fit, -np.log(discount_curve(option_mat))/option_mat)
+    # We need to pass "initial guess" value, so we take short forward rate at maturity
+    sol = scipy.optimize.minimize(mean_fit, 100 * (discount_curve(option_mat) / discount_curve(option_mat + 0.01) - 1))
     r_star = sol.x[0]
 
-    print(f"r_star = {r_star:.2f}")
-    print(f"fir error = {sol.fun:.2f} , <- we would like to to be 0.")
+    K_i = bond_price_HW1F_iter(discount_curve=discount_curve, r_t=r_star, t=option_mat, T=payment_times, alpha=alpha)
 
-    K_i = bond_price_HW1F(discount_curve = discount_curve, r_t = r_star, t = option_mat, T = payment_times, alpha = alpha)
+    if is_payer:
+        bond_call_prices = bond_option_price_HW1F(K=K_i, opt_mat=option_mat, bond_len=payment_times - option_mat,
+                                                  discount_curve=discount_curve, alpha=alpha, sigma=sigma,
+                                                  is_call=False)
+    else:
+        bond_call_prices = bond_option_price_HW1F(K=K_i, opt_mat=option_mat, bond_len=payment_times - option_mat,
+                                                  discount_curve=discount_curve, alpha=alpha, sigma=sigma, is_call=True)
 
-    bond_call_prices = bond_option_price_HW1F(K = K_i, opt_mat = option_mat, bond_len = payment_times, discount_curve = discount_curve, alpha = alpha, sigma = sigma, r_t = r_t)
-
-    return sum(delta * bond_call_prices) * notional
+    return sum(delta * strike_fixed_rate * bond_call_prices) * notional + bond_call_prices[-1] * notional
 
 class yield_curve:
     def __init__(self):
@@ -319,4 +343,33 @@ class yield_curve:
         self.model_parameters[model][bond_curve_interpolation] = calibrated_params
 
     def forward_rate(self,t1,t2,interpolation_method="PCHIP"):
-        return (np.log(self.discount_curve[interpolation_method](t1)) - np.log(self.discount_curve[interpolation_method](t2)))/(t2-t1)
+        return (self.discount_curve["PCHIP"](t1)/self.discount_curve["PCHIP"](t2)-1)/(t2-t1)
+
+
+def ql_create_swap(ytsh, swap_start: int = 2, swap_len: int = 2, frequency=0.25, fixed_rate=0.04,
+                   todays_date=ql.Date(18, 6, 2025), notional=1, r_0=0.042):
+
+    day_count = ql.Thirty360(ql.Thirty360.BondBasis)
+    start = todays_date + ql.Period(swap_start, ql.Years)
+    maturity = start + ql.Period(swap_len, ql.Years)
+    fix_schedule = ql.MakeSchedule(start, maturity, ql.Period(int(frequency * 12), ql.Months))
+    float_schedule = ql.MakeSchedule(start, maturity, ql.Period(int(frequency * 12), ql.Months))
+
+    customIndex = ql.IborIndex('MyIndex', ql.Period('1Y'), 0, ql.USDCurrency(), ql.UnitedStates(0),
+                               ql.ModifiedFollowing, False, day_count, ytsh)
+
+    customIndex.addFixing(todays_date, r_0)
+
+    swap = ql.VanillaSwap(ql.VanillaSwap.Payer, notional, fix_schedule, fixed_rate, day_count,
+                          float_schedule, customIndex, 0, day_count)
+
+    swap.setPricingEngine(ql.DiscountingSwapEngine(ytsh))
+
+    return swap
+
+def ql_create_swaption(ql_swap, ql_hull_white, ytsh):
+    exercise = ql.EuropeanExercise(ql_swap.startDate())
+    swaption = ql.Swaption(ql_swap, exercise)
+    Jamshidian_engine = ql.JamshidianSwaptionEngine(ql_hull_white, ytsh)
+    swaption.setPricingEngine(Jamshidian_engine)
+    return swaption
