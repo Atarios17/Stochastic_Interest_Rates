@@ -140,7 +140,7 @@ def jamshidian_swaption_price(discount_curve, option_mat, swap_len, strike_fixed
                                                   discount_curve=discount_curve, alpha=alpha, sigma=sigma, is_call=True)
 
     return sum(delta * strike_fixed_rate * bond_call_prices) * notional + bond_call_prices[-1] * notional
-
+  
 jamshidian_swaption_price = np.vectorize(jamshidian_swaption_price)
 
 class yield_curve:
@@ -166,7 +166,7 @@ class yield_curve:
     def interpolate_yield_and_discount_curves(self, interpolation_method="Cubic Spline"):
         """This function interpolates the Bond prices. Interpolation allows us to estimate the rates of the Bond. The default interpolation method is "Cubic Spline"."""
 
-        supported_interpolation_methods = ["Linear","Cubic Spline", "PCHIP"]
+        supported_interpolation_methods = ["Cubic Spline", "PCHIP"]
 
         if interpolation_method not in supported_interpolation_methods:
             raise ValueError(f'Inputted interpolation method is not supported. Please use any of the following ones: {str(supported_interpolation_methods)[1:-1]}')
@@ -174,100 +174,31 @@ class yield_curve:
         if len(self.market_rates) == 0:
             raise AssertionError('market_rates table is empty! Please read market data using .read_market_data() to populate it first.')
 
-        if interpolation_method == "Linear":  # Piecewise Linear Interpolation with flat ends
-            class LinearFlatEnds:
-                def __init__(self,x,y):
-                    self.x = x
-                    self.y = y
-                    self.coeffs = pd.DataFrame(columns=['a','b'])
-                    self.coeffs['a'] = (y[1:] - y[:-1]) / (x[1:] - x[:-1])
-                    self.coeffs['b'] = y[1:] - self.coeffs['a']*x[1:]
-
-                # Works both on t being a number and t being a vector
-                def __call__(self,t):
-                    t = np.clip(t,self.x[0],self.x[-1])
-                    # Find index/indices in which intervals argument(s) lie (searchsored-1)
-                    # and since for arguments above self.x[-1] it gives index that is one too big, we cut it with minimum
-                    idx = np.minimum(np.searchsorted(self.x, t, side='right') - 1, len(self.coeffs)-1)
-                    return self.coeffs['a'].values[idx]*t+self.coeffs['b'].values[idx]
-
-                def derivative(self, n):
-                    if n == 1:
-                        def f(t):
-
-                            if np.size(t) == 1:
-                                if t < self.x[0] or t >= self.x[-1]:
-                                    return 0
-
-                                else:
-                                    return self.coeffs['a'].values[np.searchsorted(self.x, np.clip(t, self.x[0], self.x[-1]), side='right') - 1]
-
-                            else:
-                                # Find indices and assign "a" coefficient as derivative:
-                                idx = np.minimum(np.searchsorted(self.x, np.clip(t, self.x[0], self.x[-1]), side='right') - 1, 2)
-                                output = self.coeffs['a'].values[idx]
-                                # But for values that are outside of interpolation bounds (i.e. lie on the flat ends) put 0 as derivative
-                                output[np.where(np.logical_and(t < self.x[0], t >= self.x[-1]))] = 0
-                                return output
-
-                        return f
-
-                    elif n >= 2:
-                        def f(t):
-                            if np.size(t) == 1:
-                                return lambda t: 0
-                            else:
-                                return np.repeat(0,np.size(t))
-                        return f
-
-                    else:
-                        raise ValueError("Derivative is defined only for positive integer numbers")
-
-            interpolated_curve = LinearFlatEnds(self.market_rates['Tenor'].values,self.market_rates['Rate'].values)
-
-
-        elif interpolation_method == "Cubic Spline":  # Piecewise Cubic Hermite Interpolation
+        if interpolation_method == "Cubic Spline":  # Piecewise Cubic Hermite Interpolation
             # We overwrite behaviour of calling interpolated function in base scipy class
-            # to obtain flat lines below first and above last point
+            # to obtain flat lines above last point
             class CublicSplineFlatEnds(scipy.interpolate.CubicSpline):
                 def __call__(self, t):
-                    t = np.clip(t, self.x[0], self.x[-1])
+                    t = np.minimum(t, self.x[-1])
                     return super().__call__(t)
 
-            interpolated_curve = CublicSplineFlatEnds(self.market_rates['Tenor'].values,self.market_rates['Rate'].values, extrapolate=False)
+            interpolated_curve = CublicSplineFlatEnds(self.market_rates['Tenor'].values,self.market_rates['Rate'].values, extrapolate=True)
 
         elif interpolation_method == "PCHIP":  # Piecewise Cubic Hermite Interpolation
             class PchipInterpolatorFlatEnds(scipy.interpolate.PchipInterpolator):
                 # We overwrite behaviour of calling interpolated function in base scipy class
-                # to obtain flat lines below first and above last point
+                # to obtain flat lines above last point
                 def __call__(self, t):
-                    t = np.clip(t,self.x[0],self.x[-1])
+                    t = np.minimum(t, self.x[-1])
                     return super().__call__(t)
 
-            interpolated_curve = PchipInterpolatorFlatEnds(self.market_rates['Tenor'].values,self.market_rates['Rate'].values, extrapolate=False)
+            interpolated_curve = PchipInterpolatorFlatEnds(self.market_rates['Tenor'].values,self.market_rates['Rate'].values, extrapolate=True)
 
-        class discount_curve:
-            def __init__(self,interpolated_yield_curve):
-                self.interpolated_yield_curve = interpolated_yield_curve
-
-            def __call__(self, t):
-                return np.exp(-t*self.interpolated_yield_curve(t))
-
-            # First derivative is calculated manually:
-            # d exp(-r(t)*t)/dt = exp(-r(t)*t)*(-r'(t)*t-r(t)*1) = -(r'(t)*t+r(t)) * exp(-r(t)*t)
-            # Second derivative written down from Wolfram
-            def derivative(self,k):
-                if k not in (1,2):
-                    raise NotImplementedError("Only first and second derivative of discount curve are supported")
-                elif k == 1:
-                    return lambda t: -(self.interpolated_yield_curve.derivative(1)(t)*t + self.interpolated_yield_curve(t)) * np.exp(-self.interpolated_yield_curve(t)*t)
-                elif k == 2:
-                    return lambda t: (-self.interpolated_yield_curve.derivative(2)(t) * t + self.interpolated_yield_curve.derivative(1)(t)**2 * t**2 +
-                            2*t*self.interpolated_yield_curve(t)*self.interpolated_yield_curve.derivative(1)(t) - 2*self.interpolated_yield_curve.derivative(1)(t)
-                            + self.interpolated_yield_curve(t)**2) * np.exp(-self.interpolated_yield_curve(t)*t)
+        def discount_curve(t: float):
+            return np.exp(-t*interpolated_curve(t))
 
         self.yield_curve[interpolation_method] = interpolated_curve
-        self.discount_curve[interpolation_method] = discount_curve(interpolated_curve)
+        self.discount_curve[interpolation_method] = discount_curve
 
     def calibrate_term_structure_model(self, options_market_data, model = "Hull-White-1F", bond_curve_interpolation = "PCHIP", is_swaptions_market_data = True):
         """This function calibrates parameters of chosen term structure model. In particular for Hull-White 1-Factor Model it calibrates theta, alpha and sigma parameters using market swaption and Bond prices."""
@@ -288,7 +219,6 @@ class yield_curve:
 
         if model == "Hull-White-1F":
             # 1-factor Hull White Model has three parameters to calibrate: function theta(t) and constants alpha and sigma.
-
             if is_swaptions_market_data:
                 def mean_fit(params):
                     alpha, sigma = params
@@ -317,36 +247,48 @@ class yield_curve:
             # theta_star(t) = d^2log(Z_star)/dt^2 - alpha * dlog(Z_star)/dt + sigma^2/(2*alpha) * (1-exp(-2*alpha*(T-t)))
             # Where Z_star is market bond price for tenor t. Derivatives are as follows:
 
-            # dlog(Z_star)/dt = 1/Z_star * dZ_star/dt
+            # Knowing thtat Z(t) = exp(-r_t * t) we get log(Z(t)) = -r_t * t
+            # dlog(Z(t))/dt = - t * r_t' - r_t
+            # d^2log(Z_star)/dt^2 =  -t * r_t'' - 2 * r_t'
+            rate = self.yield_curve[interpolation_method]
+            # Start with assignment of dZ_star/dt and d^2Z_star/dt^2:
+            d_rate_dt = self.yield_curve[interpolation_method].derivative(1)
+            d_rate_dt2 = self.yield_curve[interpolation_method].derivative(2)
 
-            # d^2log(Z_star)/dt^2 =  -1/Z_star^2 * dZ_star/dt + 1/Z_star * d^2Z_star/dt^2 =
-            # = - 1/Z_star * dlog(Z_star)/dt + 1/Z_star * d^2Z_star/dt^2 =
-            # = ( d^2Z_star/dt^2 - dlog(Z_star)/dt ) / Z_star
-            # For clarity
-            Z = self.discount_curve[bond_curve_interpolation]
-            # Then we assign dZ_star/dt and d^2Z_star/dt^2:
-            dZ_dt = self.discount_curve[bond_curve_interpolation].derivative(1)
-            dZ_dt2 = self.discount_curve[bond_curve_interpolation].derivative(2)
+            # then derivatives of logarithms:
+            dlogZ_dt = lambda t: -t*d_rate_dt(t) - rate(t)
+            dlogZ_dt2 = lambda t: -t*d_rate_dt2(t) - 2*d_rate_dt(t)
 
-            # and we calculate derivatives of logarithms:
-            dlogZ_dt = lambda t: dZ_dt(t)/self.discount_curve[bond_curve_interpolation](t)
-            dlogZ_dt2 = lambda t: (Z(t)*dZ_dt2(t) - dZ_dt(t)**2) / (Z(t)**2)
+            # and we can express theta using the derivatives and alpha + sigma parameters:
+            def theta_star(t):
+               return -dlogZ_dt2(t) - alpha * dlogZ_dt(t) + 0.5 * sigma**2/alpha * (1 - np.exp(-2 * alpha * t))
 
-            # Now theta can be expressed using above derivatives and alpha + sigma parameters:
-            def theta(t):
-                return -dlogZ_dt2(t) - alpha * dlogZ_dt(t) + 0.5 * sigma**2/alpha * (1 - np.exp(-2 * alpha * t))
-
-            calibrated_params = {"theta":theta, "alpha": alpha, "sigma": sigma}
+            calibrated_params = [theta_star, alpha, sigma]
 
         # Add chosen term structure model to dictionary of calibrated models (if not present yet):
         if model not in self.model_parameters.keys():
             self.model_parameters[model] = {}
 
         # Assign calibrated parameters
-        self.model_parameters[model][bond_curve_interpolation] = calibrated_params
+        self.model_parameters[model][interpolation_method] = calibrated_params
 
     def forward_rate(self,t1,t2,interpolation_method="PCHIP"):
         return (self.discount_curve[interpolation_method](t1)/self.discount_curve[interpolation_method](t2)-1)/(t2-t1)
+
+    def simulate_rate_path(self, dt, T, r_0, theta, alpha, sigma, N_paths):
+        n_steps = int(T / dt)
+        time = np.linspace(0, T, n_steps + 1)
+
+        theta_vals = theta(time)
+        rates = np.zeros((N_paths, n_steps + 1))
+        rates[:, 0] = r_0
+
+        for i in range(1, n_steps + 1):
+            drift = theta_vals[i - 1] - alpha*rates[:, i - 1]
+            dW = np.random.normal(0, np.sqrt(dt), N_paths)
+            rates[:, i] = rates[:, i - 1] + drift*dt + sigma*dW
+
+        return rates
 
 
 def ql_create_swap(ytsh, swap_start: int = 2, swap_len: int = 2, frequency=0.25, fixed_rate=0.04,
