@@ -28,8 +28,8 @@ yc.read_market_data(market_rates_path)
 # Setup Cubic Spline Interpolation
 print("#----------Interpolating_Cubic----------#")
 yc.interpolate_yield_and_discount_curves("Cubic Spline")
-cubic_interest_rates = np.array([yc.yield_curve["Cubic Spline"](t) for t in TIME_ARRAY])
-cubic_discount_rates = np.array([yc.discount_curve["Cubic Spline"](t) for t in TIME_ARRAY])
+cubic_interest_rates = yc.yield_curve["Cubic Spline"](TIME_ARRAY)
+cubic_discount_rates = yc.discount_curve["Cubic Spline"](TIME_ARRAY)
 Cubic_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Discount Rate":cubic_discount_rates, "Interest Rate":cubic_interest_rates})
 print("#----------Cubic_Interpolation_Done----------#")
 #print(Cubic_df)
@@ -37,8 +37,8 @@ print("#----------Cubic_Interpolation_Done----------#")
 # Setup PCHIP Interpolation
 print("#----------Interpolating_PCHIP----------#")
 yc.interpolate_yield_and_discount_curves("PCHIP")
-PCHIP_interest_rates = np.array([yc.yield_curve["Cubic Spline"](t) for t in TIME_ARRAY])
-PCHIP_discount_rates = np.array([yc.discount_curve["Cubic Spline"](t) for t in TIME_ARRAY])
+PCHIP_interest_rates = yc.yield_curve["Cubic Spline"](TIME_ARRAY)
+PCHIP_discount_rates = yc.discount_curve["Cubic Spline"](TIME_ARRAY)
 PCHIP_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Discount Rate":PCHIP_discount_rates, "Interest Rate":PCHIP_interest_rates})
 print("#----------PCHIP_Interpolation_Done----------#")
 #print(PCHIP_df)
@@ -46,8 +46,8 @@ print("#----------PCHIP_Interpolation_Done----------#")
 # Setup Linear Interpolation
 print("#----------Interpolating_Linear----------#")
 yc.interpolate_yield_and_discount_curves("Linear")
-Linear_interest_rates = np.array([yc.yield_curve["Linear"](t) for t in TIME_ARRAY])
-Linear_discount_rates = np.array([yc.discount_curve["Linear"](t) for t in TIME_ARRAY])
+Linear_interest_rates = yc.yield_curve["Linear"](TIME_ARRAY)
+Linear_discount_rates = yc.discount_curve["Linear"](TIME_ARRAY)
 Linear_df = pd.DataFrame({"Tenor": TIME_ARRAY, "Discount Rate":Linear_discount_rates, "Interest Rate":Linear_interest_rates})
 print("#----------Linear_Interpolation_Done----------#")
 #print(Linear_df)
@@ -67,6 +67,21 @@ plt.show()
 plt.waitforbuttonpress()
 plt.close()
 
+# Plot interpolated discount curves
+plt.figure(figsize=(10, 5))
+#sns.scatterplot(data=Cubic_df, x="Tenor", y="Discount Rate", color="red", label="Cubic Spline Interpolation")
+sns.lineplot(data=Cubic_df, x="Tenor", y="Discount Rate", color="red", label="Cubic Spline Interpolation")
+sns.lineplot(data=PCHIP_df, x="Tenor", y="Discount Rate", color="green", label="PCHIP Interpolation")
+sns.lineplot(data=Linear_df, x="Tenor", y="Discount Rate", color="blue", label="Linear Interpolation")
+plt.xlabel("Tenor (Years)")
+plt.ylabel("Discount Rate")
+plt.title("Discount curves by Interpolation")
+plt.legend()
+plt.grid(True)
+plt.show()
+plt.waitforbuttonpress()
+plt.close()
+
 # Bond Option Price
 # print("#----------Cubic Spline----------#")
 # print(bond_option_price_HW1F(K = 0.045, opt_mat = 10, bond_len = 12, bond_curve = yc.discount_curve["Cubic Spline"], alpha = 0.07, sigma = 0.02))
@@ -77,23 +92,21 @@ plt.close()
 # print("#----------Linear----------#")
 # print(bond_option_price_HW1F(K = 0.045, opt_mat = 10, bond_len = 12, bond_curve = yc.discount_curve["Linear"], alpha = 0.07, sigma = 0.02))
 
+# Calibrating alpha and sigma to Bond Options
+bond_option_market_data = read_bond_options_market_data(r"Market_Data\Bond_Options_20250618.csv")
+yc.calibrate_term_structure_model(bond_option_market_data,is_swaptions_market_data=False)
+yc.model_parameters["Hull-White-1F"]["PCHIP"]
 
-# Read Bond Option Market Data
-bond_options_md = read_bond_options_market_data(r"Market_Data\Bond_Options_20250618.csv")
+# Calibrating alpha and sigma to Swaptions
+swaptions_market_data = read_swaptions_market_data(r"C:\Users\Artor\Desktop\Quant_Learn\Interest_Rate_Modelling\Stochastic_Interest_Rates\Market_Data\Swaptions_SABR_20250618.csv")
+#swaptions_market_data["Price"] = swaption_price_black_model(swaptions_market_data["Strike"],swaptions_market_data["LogNormal_Vol"],swaptions_market_data["Option_Maturity_Y"],swaptions_market_data["Swap_Length_Y"],swaptions_market_data["Swap_Freq_Y"],yc.discount_curve["PCHIP"])
 
 # Calibrate model to the market prices
-print("#--Calibrating_HW_Model_to_Bond_Options_PCHIP--#")
-forward_rates = np.array([yc.forward_rate(T,T+1/12,"PCHIP") for T in bond_options_md['Option_Maturity_Y'].values])
-bond_options_md["Price"] = bond_option_price_HW1F(K = bond_options_md['Strike'].values, opt_mat=bond_options_md['Option_Maturity_Y'].values,
-                                                  bond_len= bond_options_md['Bond_Length_Y'].values,
-                                                  discount_curve = yc.discount_curve["PCHIP"],
-                                                  alpha = 0.07, sigma = 0.02, r_t = forward_rates)
-
-yc.calibrate_term_structure_model(bond_options_md)
+print("#--Calibrating_HW_Model_to_Swaptions_PCHIP--#")
+yc.calibrate_term_structure_model(swaptions_market_data)
 print("#--Calibration_Finished--#")
-print("#--Model Parameters: (theta, alpha, sigma)--#")
+print("#--Model Parameters:--#")
 print(yc.model_parameters["Hull-White-1F"]["PCHIP"])
-#yc.model_parameters["Hull-White-1F"]["PCHIP"][2] = np.float64(0.02)
 
 # Setup Quantlib for benchmarking
 print("#--Setting Up QuantLib Hull-White Model for benchmarking--#")
@@ -105,9 +118,8 @@ todays_date = ql.Date(18, 6, 2025) # In line with input market data
 ql.Settings.instance().evaluationDate = todays_date
 
 #
-sigma = 0.02 # yc.model_parameters["Hull-White-1F"]["PCHIP"][2]
-alpha = 0.07 # yc.model_parameters["Hull-White-1F"]["PCHIP"][1]
-forward_rate = 0.042 # yc.yield_curve["PCHIP"](0)
+sigma = float(yc.model_parameters["Hull-White-1F"]["PCHIP"]['sigma'])
+alpha = float(yc.model_parameters["Hull-White-1F"]["PCHIP"]['alpha'])
 
 # QL Read market rates
 ql_market_rates_dates = [todays_date + ql.Period(tenor) for tenor in market_rates_data["Tenor"].values]
@@ -125,7 +137,7 @@ print("#--QuantLib HW is set up--#")
 
 # Benchmark model Bonds pricing
 print("#--Benchmark of Bond Prices--#")
-Our_Bond_Prices = [bond_price_HW1F(yc.discount_curve["PCHIP"],yc.yield_curve["PCHIP"](0),0,T,alpha) for T in TIME_ARRAY]
+Our_Bond_Prices = bond_price_HW1F(yc.discount_curve["PCHIP"],0,TIME_ARRAY,alpha)
 plt.plot(TIME_ARRAY,Our_Bond_Prices, label = 'Our', color = 'blue')
 plt.plot(TIME_ARRAY,PCHIP_discount_rates, label = 'Market', color = 'green')
 plt.plot(TIME_ARRAY,[ql_hw_model.discountBond(0,T,0.042) for T in TIME_ARRAY], label = 'QuantLib', color = 'orange')
@@ -156,7 +168,7 @@ print("Relative Difference: {:.2f}%".format((our_bp-ql_bp)/ql_bp*100))
 
 #Plot depending on bond length
 bond_lengths = np.arange(0.25,15,0.25)
-Our_Bond_Option_Prices = [bond_option_price_HW1F(strike,option_mat,T,yc.discount_curve["PCHIP"],alpha, sigma, yc.yield_curve["PCHIP"](0)) for T in bond_lengths]
+Our_Bond_Option_Prices = bond_option_price_HW1F(strike,option_mat,bond_lengths,yc.discount_curve["PCHIP"],alpha, sigma, yc.yield_curve["PCHIP"](0))
 plt.plot(bond_lengths,Our_Bond_Option_Prices, label = 'Our', color = 'blue')
 plt.plot(bond_lengths,[ql_hw_model.discountBondOption(call_put,strike,option_mat,option_mat+T) for T in bond_lengths], label = 'QuantLib', color = 'orange')
 plt.title("Bond Option Prices Comparison")
@@ -177,7 +189,7 @@ print("#--Example single Bond option Price--#")
 print("#-- \n option maturity: {} \n bond length: {} \n strike: {} \n --#".format(option_mat,bond_len, strike))
 our_sp = jamshidian_swaption_price(yc.discount_curve["PCHIP"], swap_start, 5, fixed_rate, frequency, notional, alpha, sigma, True)
 print("Our Bond Price:")
-print(our_bp)
+print(our_sp)
 swap = ql_create_swap(ql_spot_curve_handle, swap_start, 5, frequency, fixed_rate)
 swaption = ql_create_swaption(swap, ql_hw_model, ql_spot_curve_handle)
 ql_sp = swaption.NPV()
@@ -197,6 +209,42 @@ for swap_len in swap_lenghts:
 
 plt.plot(swap_lenghts,Our_Swaption_Prices, label = 'Our', color = 'blue')
 plt.plot(swap_lenghts,ql_swaption_prices, label = 'QuantLib', color = 'orange')
+plt.title("Jamshidian Swaptions Comparison")
+plt.legend()
+plt.show()
+plt.waitforbuttonpress()
+plt.close()
+
+# Plot of prices w.r.t. option maturity
+option_maturities = np.arange(1,15)
+Our_Swaption_Prices = [jamshidian_swaption_price(yc.discount_curve["PCHIP"], option_maturity, 5, fixed_rate, frequency, notional, alpha, sigma, True) for option_maturity in option_maturities]
+
+ql_swaption_prices = []
+for option_maturity in option_maturities:
+    swap = ql_create_swap(ql_spot_curve_handle, int(option_maturity), 5, frequency, fixed_rate)
+    swaption = ql_create_swaption(swap, ql_hw_model, ql_spot_curve_handle)
+    ql_swaption_prices.append(swaption.NPV())
+
+plt.plot(option_maturities,Our_Swaption_Prices, label = 'Our', color = 'blue')
+plt.plot(option_maturities,ql_swaption_prices, label = 'QuantLib', color = 'orange')
+plt.title("Jamshidian Swaptions Comparison")
+plt.legend()
+plt.show()
+plt.waitforbuttonpress()
+plt.close()
+
+# Plot of prices w.r.t. strike
+strike_rates = np.arange(0.03,0.06,0.002)
+Our_Swaption_Prices = [jamshidian_swaption_price(yc.discount_curve["PCHIP"], 5, 5, fixed_rate, frequency, notional, alpha, sigma, True) for fixed_rate in strike_rates]
+
+ql_swaption_prices = []
+for fixed_rate in strike_rates:
+    swap = ql_create_swap(ql_spot_curve_handle, 5, 5, frequency, fixed_rate)
+    swaption = ql_create_swaption(swap, ql_hw_model, ql_spot_curve_handle)
+    ql_swaption_prices.append(swaption.NPV())
+
+plt.plot(strike_rates,Our_Swaption_Prices, label = 'Our', color = 'blue')
+plt.plot(strike_rates,ql_swaption_prices, label = 'QuantLib', color = 'orange')
 plt.title("Jamshidian Swaptions Comparison")
 plt.legend()
 plt.show()

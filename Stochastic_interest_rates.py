@@ -40,6 +40,19 @@ def read_swaptions_market_data(path):
 
     return swaptions_md
 
+# Logic behind Black Swaptions formula:
+# https://www.quantpie.co.uk/black_formula/swaption_price.php
+
+def swaption_price_black_model(K,vol,opt_mat,swap_len,swap_freq,discount_curve):
+    A = swap_freq*np.sum(np.array([discount_curve(opt_mat+t)/discount_curve(opt_mat) for t in np.arange(swap_freq,swap_len+swap_freq,swap_freq)]))
+    S0 = 100*(1/discount_curve(0.01)-1)
+    F = S0/discount_curve(opt_mat)
+    d1 = (np.log(F/K) + vol**2 * 0.5 * opt_mat) / np.sqrt(vol * np.sqrt(opt_mat))
+    d2 = d1 - vol * np.sqrt(opt_mat)
+    return A * discount_curve(opt_mat) * (F * scipy.stats.norm.cdf(d1) - K * scipy.stats.norm.cdf(d2))
+
+swaption_price_black_model = np.vectorize(swaption_price_black_model)
+
 def read_bond_options_market_data(path):
     global tenor_years_map
     bond_options_md = pd.read_csv(path)
@@ -55,39 +68,16 @@ def read_bond_options_market_data(path):
 
     return bond_options_md
 
-# Logic behind Black Swaptions formula:
-# https://www.quantpie.co.uk/black_formula/swaption_price.php
-# def bond_curve(t):
-#     if t == 1: return 0.97
-#     elif t == 2: return 0.93
-#     elif t == 3: return 0.88
-#2
-# #vol,K,T1,T2,swap_freq = 0.2, 0.05, 1, 3,1
-
-def swaption_price_black_model(K,vol,opt_mat,swap_len,swap_freq,bond_curve):
-    A = np.sum(swap_freq*np.array([bond_curve(t) for t in np.arange(swap_freq,swap_len+swap_freq,swap_freq)]))
-    F = (bond_curve(opt_mat)-bond_curve(opt_mat+swap_len))/A
+def bond_option_price_black_model(K,vol,opt_mat,bond_len,discount_curve):
+    F = discount_curve(opt_mat+bond_len)/discount_curve(opt_mat)
     d1 = (np.log(F/K) + vol**2 * 0.5 * opt_mat) / np.sqrt(vol * np.sqrt(opt_mat))
     d2 = d1 - vol * np.sqrt(opt_mat)
-    return A * bond_curve(opt_mat) * (F * scipy.stats.norm.cdf(d1) - K * scipy.stats.norm.cdf(d2))
-
-swaption_price_black_model = np.vectorize(swaption_price_black_model)
-
-# Attention: r_t = yc.forward_rate(t,t+1/12,"PCHIP")
-def bond_price_HW1F(discount_curve, r_t, t, T, alpha): #TODO: It must be deleted or replaced with bond_price_HW1F_iter
-    """This function prices bond using Hull-White bond price formula: np.exp(A(t, T) - B(t, T) * r)."""
-
-    # A and B functions for Hull-White bond price formula
-    B = (1 - np.exp(-alpha * (T - t))) / alpha
-    A = np.log(discount_curve(T-t)) + r_t * B
-
-    return np.exp(A - r_t*B)
-
-bond_price_HW1F = np.vectorize(bond_price_HW1F)
+    return discount_curve(opt_mat) * (F * scipy.stats.norm.cdf(d1) - K * scipy.stats.norm.cdf(d2))
 
 # r_t and alpha are used only if we want to use r_t not matching market
-def bond_price_HW1F_iter(discount_curve, t, T, alpha, r_t = None):
-    """This function prices bond using Hull-White bond price formula: np.exp(A(t, T) - B(t, T) * r)."""
+def bond_price_HW1F(discount_curve, t, T, alpha, r_t = None):
+    """This function prices bond using Hull-White bond price formula: np.exp(A(t, T) - B(t, T) * r)"""
+
     if r_t is None:
         return discount_curve(T)/discount_curve(t)
 
@@ -99,12 +89,9 @@ def bond_price_HW1F_iter(discount_curve, t, T, alpha, r_t = None):
 
     return np.exp(A - r_t * B)
 
-bond_price_HW1F_iter = np.vectorize(bond_price_HW1F_iter)
-
-def bond_option_price_HW1F(K, opt_mat, bond_len, discount_curve, alpha, sigma, is_call = True, r_t = None):
-
-    p1 = bond_price_HW1F_iter(discount_curve = discount_curve, t = 0, T = opt_mat, alpha = alpha, r_t = r_t)
-    p2 = bond_price_HW1F_iter(discount_curve = discount_curve, t = 0, T = opt_mat + bond_len, alpha= alpha, r_t = r_t)
+def bond_option_price_HW1F(K, opt_mat, bond_len, discount_curve, alpha, sigma, is_call = True,r_t = None):
+    p1 = bond_price_HW1F(discount_curve = discount_curve, t = 0, T = opt_mat, alpha = alpha, r_t = r_t)
+    p2 = bond_price_HW1F(discount_curve = discount_curve, t = 0, T = opt_mat + bond_len, alpha= alpha, r_t = r_t)
 
     Sigma2 = sigma ** 2 / (2 * alpha ** 3) * (1 - np.exp(-2 * alpha * opt_mat)) * (1 - np.exp(-alpha * (bond_len))) ** 2
 
@@ -117,26 +104,32 @@ def bond_option_price_HW1F(K, opt_mat, bond_len, discount_curve, alpha, sigma, i
     else :
         return K * p1 * scipy.stats.norm.cdf(-d2) - p2 * scipy.stats.norm.cdf(-d1)
 
-bond_option_price_HW1F = np.vectorize(bond_option_price_HW1F)
-
 # r_t = forward_rate (t, t+1/12, "PCHIP")
+
+# alpha = 0.07
+# sigma = 0.01
+# discount_curve = yc.discount_curve[bond_curve_interpolation],
+# option_mat = swaptions_market_data["Option_Maturity_Y"].values,
+# swap_len = swaptions_market_data["Swap_Length_Y"].values,
+# strike_fixed_rate = swaptions_market_data["Strike"].values,
+# swaptions_market_data["Swap_Freq_Y"].values, 1, alpha, sigma, True)
+
 def jamshidian_swaption_price(discount_curve, option_mat, swap_len, strike_fixed_rate, delta, notional, alpha, sigma,
                               is_payer=False):
-    """This function prices a European call option on a swap (in the Hull-White one-factor model) using so called Jamshidian trick."""
+    #"""This function prices a European call option on a swap (in the Hull-White one-factor model) using so called Jamshidian trick."""
 
     # delta = swap payment frequency
     payment_times = np.arange(option_mat + delta, option_mat + delta + swap_len, delta)
 
     # looking for r_star
     def mean_fit(r_star):
-        return (sum([bond_price_HW1F_iter(discount_curve, option_mat, option_mat + t, alpha,r_t=r_star) * strike_fixed_rate * delta
-                     for t in np.arange(delta, swap_len + delta, delta)]) + bond_price_HW1F_iter(discount_curve, option_mat,option_mat + swap_len, alpha,r_t=r_star) - 1) ** 2
+        return (sum(bond_price_HW1F(discount_curve, option_mat, option_mat + np.arange(delta, swap_len + delta, delta), alpha,r_t=r_star)) * strike_fixed_rate * delta + bond_price_HW1F(discount_curve, option_mat,option_mat + swap_len, alpha,r_t=r_star) - 1) ** 2
 
     # We need to pass "initial guess" value, so we take short forward rate at maturity
     sol = scipy.optimize.minimize(mean_fit, 100 * (discount_curve(option_mat) / discount_curve(option_mat + 0.01) - 1))
     r_star = sol.x[0]
 
-    K_i = bond_price_HW1F_iter(discount_curve=discount_curve, r_t=r_star, t=option_mat, T=payment_times, alpha=alpha)
+    K_i = bond_price_HW1F(discount_curve=discount_curve, r_t=r_star, t=option_mat, T=payment_times, alpha=alpha)
 
     if is_payer:
         bond_call_prices = bond_option_price_HW1F(K=K_i, opt_mat=option_mat, bond_len=payment_times - option_mat,
@@ -147,8 +140,8 @@ def jamshidian_swaption_price(discount_curve, option_mat, swap_len, strike_fixed
                                                   discount_curve=discount_curve, alpha=alpha, sigma=sigma, is_call=True)
 
     return sum(delta * strike_fixed_rate * bond_call_prices) * notional + bond_call_prices[-1] * notional
-
-def
+  
+jamshidian_swaption_price = np.vectorize(jamshidian_swaption_price)
 
 class yield_curve:
     def __init__(self):
@@ -207,27 +200,45 @@ class yield_curve:
         self.yield_curve[interpolation_method] = interpolated_curve
         self.discount_curve[interpolation_method] = discount_curve
 
-    def calibrate_term_structure_model(self, options_market_data, model = "Hull-White-1F", interpolation_method = "PCHIP"):
+    def calibrate_term_structure_model(self, options_market_data, model = "Hull-White-1F", bond_curve_interpolation = "PCHIP", is_swaptions_market_data = True):
         """This function calibrates parameters of chosen term structure model. In particular for Hull-White 1-Factor Model it calibrates theta, alpha and sigma parameters using market swaption and Bond prices."""
         supported_term_structure_models = ["Hull-White-1F"] # "Ho-Lee"
+
+        if is_swaptions_market_data:
+            options_market_data["Price"] = swaption_price_black_model(options_market_data["Strike"],options_market_data["LogNormal_Vol"],options_market_data["Option_Maturity_Y"],options_market_data["Swap_Length_Y"],options_market_data["Swap_Freq_Y"],self.discount_curve[bond_curve_interpolation])
+
+        else:
+            options_market_data["Price"] = bond_option_price_black_model(options_market_data["Strike"],
+                                                                         options_market_data["LogNormal_Vol"],
+                                                                         options_market_data["Option_Maturity_Y"],
+                                                                         options_market_data["Bond_Length_Y"],
+                                                                         self.discount_curve[bond_curve_interpolation])
 
         if model not in supported_term_structure_models:
             raise ValueError(f'Inputted term structure model is not supported. Please use any of the following ones: {str(supported_term_structure_models)[1:-1]}')
 
         if model == "Hull-White-1F":
             # 1-factor Hull White Model has three parameters to calibrate: function theta(t) and constants alpha and sigma.
-
-            #Now we can fit alpha and sigma to market prices of chosen derivative instrument (example swaptions, bond options or bond future options)
-            forward_rates = np.array([self.forward_rate(T, T + 1 / 12, interpolation_method) for T in options_market_data['Option_Maturity_Y'].values])
-            def mean_fit(params):
-                alpha, sigma = params
-                pred = bond_option_price_HW1F(K = options_market_data["Strike"].values, opt_mat = options_market_data["Option_Maturity_Y"].values,
-                                              bond_len = options_market_data["Bond_Length_Y"].values, discount_curve = self.discount_curve[interpolation_method],
-                                              alpha = alpha, sigma = sigma, r_t = forward_rates)
-                return np.mean((pred - options_market_data["Price"]) ** 2)
+            if is_swaptions_market_data:
+                def mean_fit(params):
+                    alpha, sigma = params
+                    pred = jamshidian_swaption_price(self.discount_curve[bond_curve_interpolation],options_market_data["Option_Maturity_Y"].values,
+                                                     options_market_data["Swap_Length_Y"].values,options_market_data["Strike"].values,
+                                                     options_market_data["Swap_Freq_Y"].values,1,alpha,sigma,True)
+                    return 100*np.mean((pred - options_market_data["Price"]) ** 2)
+            else:
+                def mean_fit(params):
+                    alpha, sigma = params
+                    pred = bond_option_price_HW1F(K=options_market_data["Strike"].values,
+                                                  opt_mat=options_market_data["Option_Maturity_Y"].values,
+                                                  bond_len=options_market_data["Bond_Length_Y"].values,
+                                                  discount_curve=self.discount_curve[bond_curve_interpolation],
+                                                  alpha=alpha, sigma=sigma)
+                    return 100*np.mean((pred - options_market_data["Price"]) ** 2)
 
             # We eed to pass "initial guess" values.
-            fitted_params = scipy.optimize.minimize(mean_fit,np.array([0.07,0.01]))
+            fitted_params = scipy.optimize.minimize(mean_fit,np.array([0.05,0.05]), bounds=[(0.01,0.20),(0.01,0.20)])
+            print("Calibration Finished with diff values: " + str(fitted_params.fun))
             alpha, sigma = fitted_params.x[0], fitted_params.x[1]
 
             # Theta function is calibrated by making model's bond prices equal market bond prices
@@ -239,19 +250,18 @@ class yield_curve:
             # Knowing thtat Z(t) = exp(-r_t * t) we get log(Z(t)) = -r_t * t
             # dlog(Z(t))/dt = - t * r_t' - r_t
             # d^2log(Z_star)/dt^2 =  -t * r_t'' - 2 * r_t'
-
             rate = self.yield_curve[interpolation_method]
             # Start with assignment of dZ_star/dt and d^2Z_star/dt^2:
             d_rate_dt = self.yield_curve[interpolation_method].derivative(1)
             d_rate_dt2 = self.yield_curve[interpolation_method].derivative(2)
 
             # then derivatives of logarithms:
-            dlog_rate_dt = lambda t: -t*d_rate_dt(t) - rate(t)
-            dlog_rate_dt2 = lambda t: -t*d_rate_dt2(t) - 2*d_rate_dt(t)
+            dlogZ_dt = lambda t: -t*d_rate_dt(t) - rate(t)
+            dlogZ_dt2 = lambda t: -t*d_rate_dt2(t) - 2*d_rate_dt(t)
 
             # and we can express theta using the derivatives and alpha + sigma parameters:
             def theta_star(t):
-               return -dlog_rate_dt2(t) - alpha * dlog_rate_dt(t) + 0.5 * sigma**2/alpha * (1 - np.exp(-2 * alpha * t))
+               return -dlogZ_dt2(t) - alpha * dlogZ_dt(t) + 0.5 * sigma**2/alpha * (1 - np.exp(-2 * alpha * t))
 
             calibrated_params = [theta_star, alpha, sigma]
 
@@ -263,7 +273,7 @@ class yield_curve:
         self.model_parameters[model][interpolation_method] = calibrated_params
 
     def forward_rate(self,t1,t2,interpolation_method="PCHIP"):
-        return (self.discount_curve["PCHIP"](t1)/self.discount_curve["PCHIP"](t2)-1)/(t2-t1)
+        return (self.discount_curve[interpolation_method](t1)/self.discount_curve[interpolation_method](t2)-1)/(t2-t1)
 
     def simulate_rate_path(self, dt, T, r_0, theta, alpha, sigma, N_paths):
         n_steps = int(T / dt)
