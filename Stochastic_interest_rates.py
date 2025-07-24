@@ -104,16 +104,6 @@ def bond_option_price_HW1F(K, opt_mat, bond_len, discount_curve, alpha, sigma, i
     else :
         return K * p1 * scipy.stats.norm.cdf(-d2) - p2 * scipy.stats.norm.cdf(-d1)
 
-# r_t = forward_rate (t, t+1/12, "PCHIP")
-
-# alpha = 0.07
-# sigma = 0.01
-# discount_curve = yc.discount_curve[bond_curve_interpolation],
-# option_mat = swaptions_market_data["Option_Maturity_Y"].values,
-# swap_len = swaptions_market_data["Swap_Length_Y"].values,
-# strike_fixed_rate = swaptions_market_data["Strike"].values,
-# swaptions_market_data["Swap_Freq_Y"].values, 1, alpha, sigma, True)
-
 def jamshidian_swaption_price(discount_curve, option_mat, swap_len, strike_fixed_rate, delta, notional, alpha, sigma,
                               is_payer=False):
     #"""This function prices a European call option on a swap (in the Hull-White one-factor model) using so called Jamshidian trick."""
@@ -200,19 +190,19 @@ class yield_curve:
         self.yield_curve[interpolation_method] = interpolated_curve
         self.discount_curve[interpolation_method] = discount_curve
 
-    def calibrate_term_structure_model(self, options_market_data, model = "Hull-White-1F", bond_curve_interpolation = "PCHIP", is_swaptions_market_data = True):
+    def calibrate_term_structure_model(self, options_market_data, model = "Hull-White-1F", interpolation_method = "PCHIP", is_swaptions_market_data = True):
         """This function calibrates parameters of chosen term structure model. In particular for Hull-White 1-Factor Model it calibrates theta, alpha and sigma parameters using market swaption and Bond prices."""
         supported_term_structure_models = ["Hull-White-1F"] # "Ho-Lee"
 
         if is_swaptions_market_data:
-            options_market_data["Price"] = swaption_price_black_model(options_market_data["Strike"],options_market_data["LogNormal_Vol"],options_market_data["Option_Maturity_Y"],options_market_data["Swap_Length_Y"],options_market_data["Swap_Freq_Y"],self.discount_curve[bond_curve_interpolation])
+            options_market_data["Price"] = swaption_price_black_model(options_market_data["Strike"],options_market_data["LogNormal_Vol"],options_market_data["Option_Maturity_Y"],options_market_data["Swap_Length_Y"],options_market_data["Swap_Freq_Y"],self.discount_curve[interpolation_method])
 
         else:
             options_market_data["Price"] = bond_option_price_black_model(options_market_data["Strike"],
                                                                          options_market_data["LogNormal_Vol"],
                                                                          options_market_data["Option_Maturity_Y"],
                                                                          options_market_data["Bond_Length_Y"],
-                                                                         self.discount_curve[bond_curve_interpolation])
+                                                                         self.discount_curve[interpolation_method])
 
         if model not in supported_term_structure_models:
             raise ValueError(f'Inputted term structure model is not supported. Please use any of the following ones: {str(supported_term_structure_models)[1:-1]}')
@@ -222,7 +212,7 @@ class yield_curve:
             if is_swaptions_market_data:
                 def mean_fit(params):
                     alpha, sigma = params
-                    pred = jamshidian_swaption_price(self.discount_curve[bond_curve_interpolation],options_market_data["Option_Maturity_Y"].values,
+                    pred = jamshidian_swaption_price(self.discount_curve[interpolation_method],options_market_data["Option_Maturity_Y"].values,
                                                      options_market_data["Swap_Length_Y"].values,options_market_data["Strike"].values,
                                                      options_market_data["Swap_Freq_Y"].values,1,alpha,sigma,True)
                     return 100*np.mean((pred - options_market_data["Price"]) ** 2)
@@ -232,7 +222,7 @@ class yield_curve:
                     pred = bond_option_price_HW1F(K=options_market_data["Strike"].values,
                                                   opt_mat=options_market_data["Option_Maturity_Y"].values,
                                                   bond_len=options_market_data["Bond_Length_Y"].values,
-                                                  discount_curve=self.discount_curve[bond_curve_interpolation],
+                                                  discount_curve=self.discount_curve[interpolation_method],
                                                   alpha=alpha, sigma=sigma)
                     return 100*np.mean((pred - options_market_data["Price"]) ** 2)
 
@@ -247,7 +237,7 @@ class yield_curve:
             # theta_star(t) = d^2log(Z_star)/dt^2 - alpha * dlog(Z_star)/dt + sigma^2/(2*alpha) * (1-exp(-2*alpha*(T-t)))
             # Where Z_star is market bond price for tenor t. Derivatives are as follows:
 
-            # Knowing thtat Z(t) = exp(-r_t * t) we get log(Z(t)) = -r_t * t
+            # Because Z(t) = exp(-r_t * t) then log(Z(t)) = -r_t * t
             # dlog(Z(t))/dt = - t * r_t' - r_t
             # d^2log(Z_star)/dt^2 =  -t * r_t'' - 2 * r_t'
             rate = self.yield_curve[interpolation_method]
