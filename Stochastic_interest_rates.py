@@ -133,12 +133,14 @@ def jamshidian_swaption_price(discount_curve, option_mat, swap_len, strike_fixed
   
 jamshidian_swaption_price = np.vectorize(jamshidian_swaption_price)
 
-class yield_curve:
+class hull_white_model:
     def __init__(self):
         self.market_rates = pd.DataFrame([], columns=['Tenor', 'Rate'])  # [r1,r2,..., rn]
-        self.yield_curve = {}  # {"Cubic Spline": Z*(t), "PCHIIP": Z*(t)}
-        self.discount_curve = {}  # {"Cubic Spline": Z*(t), "PCHIIP": Z*(t)}
-        self.model_parameters = {}  # {"Hull-White":{"Hermite":[eta,gamma,sigma],"Linear":[eta,gamma,sigma]},"Lee":{"Hermite":[a,b],"Linear":[a,b]}}
+        self.yield_curve = lambda t: 0
+        self.discount_curve = lambda t: 0
+        self.alpha = 0.0
+        self.sigma = 0.0
+        self.theta = lambda t: 0
 
     def read_market_data(self, market_data_path):
         # We assume market rates are in format of two columns table:
@@ -153,24 +155,24 @@ class yield_curve:
         # Translate rates to decimal numbers
         self.market_rates['Rate'] = self.market_rates['Rate']*0.01
 
-    def interpolate_yield_and_discount_curves(self, interpolation_method="Cubic Spline"):
-        """This function interpolates the Bond prices. Interpolation allows us to estimate the rates of the Bond. The default interpolation method is "Cubic Spline"."""
+    def interpolate_yield_and_discount_curves(self, interpolation_method = "Cubic Spline"):
+        """This function interpolates yield curve and bond prices to market quotes. The default interpolation method is "Cubic Spline"."""
 
         supported_interpolation_methods = ["Cubic Spline", "PCHIP"]
-
-        if interpolation_method not in supported_interpolation_methods:
-            raise ValueError(f'Inputted interpolation method is not supported. Please use any of the following ones: {str(supported_interpolation_methods)[1:-1]}')
 
         if len(self.market_rates) == 0:
             raise AssertionError('market_rates table is empty! Please read market data using .read_market_data() to populate it first.')
 
-        if interpolation_method == "Cubic Spline":  # Piecewise Cubic Hermite Interpolation
+        if interpolation_method not in supported_interpolation_methods:
+            raise ValueError(f'Inputted interpolation method is not supported. Please use any of the following ones: {str(supported_interpolation_methods)[1:-1]}')
+
+        elif interpolation_method == "Cubic Spline":  # Piecewise Cubic Hermite Interpolation
             # We overwrite behaviour of calling interpolated function in base scipy class
             # to obtain flat lines above last point
             class CublicSplineFlatEnds(scipy.interpolate.CubicSpline):
-                def __call__(self, t):
+                def __call__(self, t:  float | np.ndarray) -> np.float64 | np.ndarray:
                     t = np.minimum(t, self.x[-1])
-                    return super().__call__(t)
+                    return 1*super().__call__(t) # Multiplication by 1, so in case of t being a float it will return a float
 
             interpolated_curve = CublicSplineFlatEnds(self.market_rates['Tenor'].values,self.market_rates['Rate'].values, extrapolate=True)
 
@@ -178,107 +180,101 @@ class yield_curve:
             class PchipInterpolatorFlatEnds(scipy.interpolate.PchipInterpolator):
                 # We overwrite behaviour of calling interpolated function in base scipy class
                 # to obtain flat lines above last point
-                def __call__(self, t):
+                def __call__(self, t:  float | np.ndarray) -> np.float64 | np.ndarray:
                     t = np.minimum(t, self.x[-1])
-                    return super().__call__(t)
+                    return 1*super().__call__(t) # Multiplication by 1, so in case of t being a float it will return a float
 
             interpolated_curve = PchipInterpolatorFlatEnds(self.market_rates['Tenor'].values,self.market_rates['Rate'].values, extrapolate=True)
 
-        def discount_curve(t: float):
+        def discount_curve(t: float | np.ndarray) -> float | np.ndarray:
+            """This function calculates discount rate(s) for given time moment(s)"""
             return np.exp(-t*interpolated_curve(t))
 
-        self.yield_curve[interpolation_method] = interpolated_curve
-        self.discount_curve[interpolation_method] = discount_curve
+        self.yield_curve = interpolated_curve
+        self.discount_curve = discount_curve
 
-    def calibrate_term_structure_model(self, options_market_data, model = "Hull-White-1F", interpolation_method = "PCHIP", is_swaptions_market_data = True):
-        """This function calibrates parameters of chosen term structure model. In particular for Hull-White 1-Factor Model it calibrates theta, alpha and sigma parameters using market swaption and Bond prices."""
-        supported_term_structure_models = ["Hull-White-1F"] # "Ho-Lee"
+    def calibrate_model_params(self, options_market_data: pd.DataFrame, is_swaptions_market_data: bool = True) -> None:
+        """This function calibrates parameters alpha, sigma and theta of Hull White 1-FactOr model. Parameters alpha and
+         sigma can be calibrated either to bond options or swaptions market data (which is default setting),
+          while theta is calibrated to market yield curve."""
 
+        # If calibration to swaptions is chosen
         if is_swaptions_market_data:
-            options_market_data["Price"] = swaption_price_black_model(options_market_data["Strike"],options_market_data["LogNormal_Vol"],options_market_data["Option_Maturity_Y"],options_market_data["Swap_Length_Y"],options_market_data["Swap_Freq_Y"],self.discount_curve[interpolation_method])
+            options_market_data["Price"] = swaption_price_black_model(options_market_data["Strike"],options_market_data["LogNormal_Vol"],options_market_data["Option_Maturity_Y"],options_market_data["Swap_Length_Y"],options_market_data["Swap_Freq_Y"],self.discount_curve)
 
+        # If calibration to bond options is chosen
         else:
             options_market_data["Price"] = bond_option_price_black_model(options_market_data["Strike"],
                                                                          options_market_data["LogNormal_Vol"],
                                                                          options_market_data["Option_Maturity_Y"],
                                                                          options_market_data["Bond_Length_Y"],
-                                                                         self.discount_curve[interpolation_method])
+                                                                         self.discount_curve)
 
-        if model not in supported_term_structure_models:
-            raise ValueError(f'Inputted term structure model is not supported. Please use any of the following ones: {str(supported_term_structure_models)[1:-1]}')
+        # 1-factor Hull White Model has three parameters to calibrate: function theta(t) and constants alpha and sigma.
+        if is_swaptions_market_data:
+            def mean_fit(params):
+                alpha, sigma = params
+                pred = jamshidian_swaption_price(self.discount_curve,options_market_data["Option_Maturity_Y"].values,
+                                                 options_market_data["Swap_Length_Y"].values,options_market_data["Strike"].values,
+                                                 options_market_data["Swap_Freq_Y"].values,1,alpha,sigma,True)
+                return 100*np.mean((pred - options_market_data["Price"]) ** 2)
+        else:
+            def mean_fit(params):
+                alpha, sigma = params
+                pred = bond_option_price_HW1F(K=options_market_data["Strike"].values,
+                                              opt_mat=options_market_data["Option_Maturity_Y"].values,
+                                              bond_len=options_market_data["Bond_Length_Y"].values,
+                                              discount_curve=self.discount_curve,
+                                              alpha=alpha, sigma=sigma)
+                return 100*np.mean((pred - options_market_data["Price"]) ** 2)
 
-        if model == "Hull-White-1F":
-            # 1-factor Hull White Model has three parameters to calibrate: function theta(t) and constants alpha and sigma.
-            if is_swaptions_market_data:
-                def mean_fit(params):
-                    alpha, sigma = params
-                    pred = jamshidian_swaption_price(self.discount_curve[interpolation_method],options_market_data["Option_Maturity_Y"].values,
-                                                     options_market_data["Swap_Length_Y"].values,options_market_data["Strike"].values,
-                                                     options_market_data["Swap_Freq_Y"].values,1,alpha,sigma,True)
-                    return 100*np.mean((pred - options_market_data["Price"]) ** 2)
-            else:
-                def mean_fit(params):
-                    alpha, sigma = params
-                    pred = bond_option_price_HW1F(K=options_market_data["Strike"].values,
-                                                  opt_mat=options_market_data["Option_Maturity_Y"].values,
-                                                  bond_len=options_market_data["Bond_Length_Y"].values,
-                                                  discount_curve=self.discount_curve[interpolation_method],
-                                                  alpha=alpha, sigma=sigma)
-                    return 100*np.mean((pred - options_market_data["Price"]) ** 2)
+        # We need to pass "initial guess" values.
+        fitted_params = scipy.optimize.minimize(mean_fit,np.array([0.05,0.05]), bounds=[(0.01,0.20),(0.01,0.20)])
+        print("Calibration Finished with mean price diff: {:.4f}%".format(fitted_params.fun))
+        alpha, sigma = fitted_params.x[0], fitted_params.x[1]
 
-            # We eed to pass "initial guess" values.
-            fitted_params = scipy.optimize.minimize(mean_fit,np.array([0.05,0.05]), bounds=[(0.01,0.20),(0.01,0.20)])
-            print("Calibration Finished with diff values: " + str(fitted_params.fun))
-            alpha, sigma = fitted_params.x[0], fitted_params.x[1]
+        # Theta function is calibrated by making model's bond prices equal market bond prices
+        # This way theta can be expressed by market bond prices + alpha and sigma parameters.
+        # We call theta(t) that assures matching market bond prices theta_star(t) and formula is:
+        # theta_star(t) = d^2log(Z_star)/dt^2 - alpha * dlog(Z_star)/dt + sigma^2/(2*alpha) * (1-exp(-2*alpha*(T-t)))
+        # Where Z_star is market bond price for tenor t. Derivatives are as follows:
 
-            # Theta function is calibrated by making model's bond prices equal market bond prices
-            # This way theta can be expressed by market bond prices + alpha and sigma parameters.
-            # We call theta(t) that assures matching market bond prices theta_star(t) and formula is:
-            # theta_star(t) = d^2log(Z_star)/dt^2 - alpha * dlog(Z_star)/dt + sigma^2/(2*alpha) * (1-exp(-2*alpha*(T-t)))
-            # Where Z_star is market bond price for tenor t. Derivatives are as follows:
+        # Because Z(t) = exp(-r_t * t) then log(Z(t)) = -r_t * t
+        # dlog(Z(t))/dt = - t * r_t' - r_t
+        # d^2log(Z_star)/dt^2 =  -t * r_t'' - 2 * r_t'
+        rate = self.yield_curve
+        # Start with assignment of dZ_star/dt and d^2Z_star/dt^2:
+        d_rate_dt = self.yield_curve.derivative(1)
+        d_rate_dt2 = self.yield_curve.derivative(2)
 
-            # Because Z(t) = exp(-r_t * t) then log(Z(t)) = -r_t * t
-            # dlog(Z(t))/dt = - t * r_t' - r_t
-            # d^2log(Z_star)/dt^2 =  -t * r_t'' - 2 * r_t'
-            rate = self.yield_curve[interpolation_method]
-            # Start with assignment of dZ_star/dt and d^2Z_star/dt^2:
-            d_rate_dt = self.yield_curve[interpolation_method].derivative(1)
-            d_rate_dt2 = self.yield_curve[interpolation_method].derivative(2)
+        # then derivatives of logarithms:
+        dlogZ_dt = lambda t: -t*d_rate_dt(t) - rate(t)
+        dlogZ_dt2 = lambda t: -t*d_rate_dt2(t) - 2*d_rate_dt(t)
 
-            # then derivatives of logarithms:
-            dlogZ_dt = lambda t: -t*d_rate_dt(t) - rate(t)
-            dlogZ_dt2 = lambda t: -t*d_rate_dt2(t) - 2*d_rate_dt(t)
-
-            # and we can express theta using the derivatives and alpha + sigma parameters:
-            def theta_star(t):
-               return -dlogZ_dt2(t) - alpha * dlogZ_dt(t) + 0.5 * sigma**2/alpha * (1 - np.exp(-2 * alpha * t))
-
-            calibrated_params = [theta_star, alpha, sigma]
-
-        # Add chosen term structure model to dictionary of calibrated models (if not present yet):
-        if model not in self.model_parameters.keys():
-            self.model_parameters[model] = {}
+        # and we can express theta using the derivatives and alpha + sigma parameters:
+        def theta(t):
+           return -dlogZ_dt2(t) - alpha * dlogZ_dt(t) + 0.5 * sigma**2/alpha * (1 - np.exp(-2 * alpha * t))
 
         # Assign calibrated parameters
-        self.model_parameters[model][interpolation_method] = calibrated_params
+        self.alpha, self.sigma, self.theta= alpha, sigma, theta
 
-    def forward_rate(self,t1,t2,interpolation_method="PCHIP"):
-        return (self.discount_curve[interpolation_method](t1)/self.discount_curve[interpolation_method](t2)-1)/(t2-t1)
+    def forward_rate(self,t1,t2):
+        return (self.discount_curve(t1)/self.discount_curve(t2)-1)/(t2-t1)
 
-    def simulate_rate_path(self, dt, T, r_0, theta, alpha, sigma, N_paths):
+    def simulate_rate_paths(self, T: float, N_paths: int, dt: float = 0.0025):
         n_steps = int(T / dt)
-        time = np.linspace(0, T, n_steps + 1)
+        time_vec = np.linspace(0, T, n_steps + 1)
 
-        theta_vals = theta(time)
-        rates = np.zeros((N_paths, n_steps + 1))
-        rates[:, 0] = r_0
+        theta_vals = self.theta(time_vec)
+        rates_sims = np.zeros((N_paths, n_steps + 1))
+        rates_sims[:, 0] = self.yield_curve(0)
 
         for i in range(1, n_steps + 1):
-            drift = theta_vals[i - 1] - alpha*rates[:, i - 1]
+            drift = theta_vals[i - 1] - self.alpha*rates_sims[:, i - 1]
             dW = np.random.normal(0, np.sqrt(dt), N_paths)
-            rates[:, i] = rates[:, i - 1] + drift*dt + sigma*dW
+            rates_sims[:, i] = rates_sims[:, i - 1] + drift*dt + self.sigma*dW
 
-        return rates
+        return (time_vec, rates_sims)
 
 
 def ql_create_swap(ytsh, swap_start: int = 2, swap_len: int = 2, frequency=0.25, fixed_rate=0.04,
@@ -308,3 +304,6 @@ def ql_create_swaption(ql_swap, ql_hull_white, ytsh):
     Jamshidian_engine = ql.JamshidianSwaptionEngine(ql_hull_white, ytsh)
     swaption.setPricingEngine(Jamshidian_engine)
     return swaption
+
+def bond_price_mc(time_vec, r_sims):
+    return np.mean(np.exp(-scipy.integrate.trapezoid(r_sims, time_vec)))
