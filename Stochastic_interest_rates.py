@@ -133,6 +133,17 @@ def jamshidian_swaption_price(discount_curve, option_mat, swap_len, strike_fixed
   
 jamshidian_swaption_price = np.vectorize(jamshidian_swaption_price)
 
+def bond_option_price_mc(time_vec, r_sims, option_mat, bond_mat, strike, discount_curve, alpha, is_call = True):
+
+    bond_price = bond_price_HW1F(discount_curve=discount_curve, t=option_mat, T=option_mat+bond_mat, alpha=alpha, r_t=r_sims[:, -1])
+
+    if is_call:
+        payoff = np.maximum(bond_price - strike, 0)
+    else:
+        payoff = np.maximum(strike - bond_price, 0)
+
+    return np.mean(np.exp(-scipy.integrate.trapezoid(r_sims, time_vec)) * payoff)
+
 class hull_white_model:
     def __init__(self):
         self.market_rates = pd.DataFrame([], columns=['Tenor', 'Rate'])  # [r1,r2,..., rn]
