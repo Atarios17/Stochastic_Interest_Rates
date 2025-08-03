@@ -126,7 +126,8 @@ ql_market_rates_dates = [todays_date + ql.Period(tenor) for tenor in market_rate
 # Tenor 1.5M is treated incorrectly in line above (is treated as 1M), so we shift extra 0.5M = 15d manually
 ql_market_rates_dates[1] += ql.Period("15d")
 
-ql_yield_curve_market = ql.ZeroCurve(ql_market_rates_dates, market_rates_data['Rate'].values*0.01, day_count)
+#ql_yield_curve_market = ql.ZeroCurve(ql_market_rates_dates, market_rates_data['Rate'].values*0.01, day_count)
+ql_yield_curve_market = ql.CubicZeroCurve(ql_market_rates_dates, market_rates_data['Rate'].values*0.01, day_count)
 ql_yield_curve_market.enableExtrapolation()
 ql_spot_curve_handle = ql.YieldTermStructureHandle(ql_yield_curve_market)
 # Quantlib HullWhite model
@@ -135,7 +136,7 @@ print("#--QuantLib HW is set up--#")
 
 # Benchmark model Bonds pricing
 print("#--Benchmark of Bond Prices--#")
-Our_Bond_Prices = bond_price_HW1F(hw_pchip.discount_curve,0,TIME_ARRAY,hw_pchip.alpha)
+Our_Bond_Prices = bond_price_HW1F(hw_pchip.yield_curve,0,TIME_ARRAY,hw_pchip.alpha, hw_pchip.sigma, r_t = hw_pchip.yield_curve(0))
 plt.plot(TIME_ARRAY,Our_Bond_Prices, label = 'Our', color = 'blue')
 plt.plot(TIME_ARRAY,PCHIP_discount_rates, label = 'Market', color = 'green')
 plt.plot(TIME_ARRAY,[ql_hw_model.discountBond(0,T,float(hw_pchip.yield_curve(0))) for T in TIME_ARRAY], label = 'QuantLib', color = 'orange')
@@ -150,26 +151,29 @@ print("#--Benchmark of Call Bond Option Prices--#")
 call_put = 1
 option_mat = 3
 bond_len = 4
-strike = float(bond_price_HW1F(hw_pchip.discount_curve,option_mat,option_mat+bond_len,hw_pchip.alpha,float(hw_pchip.yield_curve(0))))
+
+#bond_price_HW1F(discount_curve, t, T, alpha, r_t = None):
+strike = float(bond_price_HW1F(hw_pchip.yield_curve,option_mat,option_mat+bond_len,hw_pchip.alpha,hw_pchip.sigma))
 # Single price
 print("#--Example Bond Option Price--#")
 print("#-- \n option maturity: {} \n bond length: {} \n strike: {} \n --#".format(option_mat,bond_len, strike))
-our_bp = bond_option_price_HW1F(strike,option_mat,bond_len,hw_pchip.discount_curve,hw_pchip.alpha, hw_pchip.sigma, float(hw_pchip.yield_curve(0)))
+our_bp = bond_option_price_HW1F(strike,option_mat,bond_len,hw_pchip.yield_curve,hw_pchip.alpha, hw_pchip.sigma, float(hw_pchip.yield_curve(0)))
 print("Our Bond Option Price:")
 print(our_bp)
-t_vec, r_t = hw_pchip.simulate_rate_paths(option_mat, 10000, 0.0025)
-mc_bp = bond_option_price_mc(t_vec, r_t, option_mat, bond_len, strike, hw_pchip.discount_curve, hw_pchip.alpha)
+t_vec, r_t = hw_pchip.simulate_rate_paths(T = option_mat, N_paths = 10000, dt = 0.0025)
+mc_bp = bond_option_price_mc(t_vec, r_t, option_mat, bond_len, strike, hw_pchip.yield_curve, hw_pchip.alpha, hw_pchip.sigma)
 print("MC Bond Option Price:")
 print(mc_bp)
 ql_bp = ql_hw_model.discountBondOption(call_put,strike,option_mat,option_mat+bond_len)
 print("QuantLib Bond Option Price:")
 print(ql_bp)
-print("Relative Difference: {:.2f}%".format((our_bp-ql_bp)/ql_bp*100))
+print("Relative Difference Ours to QuantLib: {:.2f}%".format((our_bp-ql_bp)/ql_bp*100))
+print("Relative Difference Monte Carlo to QuantLib: {:.2f}%".format((mc_bp-ql_bp)/ql_bp*100))
 
 # Plot of bond option prices w.r.t. bond maturity
-bond_lengths = np.arange(0.25,15,0.25)
-Our_Bond_Option_Prices = bond_option_price_HW1F(strike,option_mat,bond_lengths,hw_pchip.discount_curve, hw_pchip.alpha, hw_pchip.sigma, float(hw_pchip.yield_curve(0)))
-MC_Bond_Option_Prices = np.array([bond_option_price_mc(t_vec, r_t, option_mat, bond_len, strike, hw_pchip.discount_curve, hw_pchip.alpha) for bond_len in bond_lengths])
+bond_lengths = np.arange(0.25,20,0.25)
+Our_Bond_Option_Prices = bond_option_price_HW1F(strike,option_mat,bond_lengths,hw_pchip.yield_curve, hw_pchip.alpha, hw_pchip.sigma)
+MC_Bond_Option_Prices = np.array([bond_option_price_mc(time_vec[:int(option_mat/dt)], r_sims[:,:int(option_mat/dt)], option_mat, bond_len, strike, hw_pchip.yield_curve, hw_pchip.alpha, hw_pchip.sigma) for bond_len in bond_lengths])
 plt.plot(bond_lengths,Our_Bond_Option_Prices, label = 'Our', color = 'blue')
 plt.plot(bond_lengths,MC_Bond_Option_Prices, label = 'MC', color = 'green')
 plt.plot(bond_lengths,[ql_hw_model.discountBondOption(call_put,strike,option_mat,option_mat+T) for T in bond_lengths], label = 'QuantLib', color = 'orange')
@@ -181,11 +185,11 @@ plt.close()
 
 # Plot of bond option prices w.r.t. option maturity
 opt_maturities = np.arange(0.25,15,0.25)
-Our_Bond_Option_Prices = bond_option_price_HW1F(strike,opt_maturities,bond_len,hw_pchip.discount_curve, hw_pchip.alpha, hw_pchip.sigma, float(hw_pchip.yield_curve(0)))
-MC_Bond_Option_Prices = np.array([bond_option_price_mc(t_vec, r_t, option_mat, bond_len, strike, hw_pchip.discount_curve, hw_pchip.alpha) for option_mat in opt_maturities])
-plt.plot(bond_lengths,Our_Bond_Option_Prices, label = 'Our', color = 'blue')
-plt.plot(bond_lengths,MC_Bond_Option_Prices, label = 'MC', color = 'green')
-plt.plot(bond_lengths,[ql_hw_model.discountBondOption(call_put,strike,option_mat,option_mat+bond_len) for option_mat in opt_maturities], label = 'QuantLib', color = 'orange')
+Our_Bond_Option_Prices = bond_option_price_HW1F(strike,opt_maturities,bond_len,hw_pchip.yield_curve, hw_pchip.alpha, hw_pchip.sigma)
+MC_Bond_Option_Prices = np.array([bond_option_price_mc(time_vec[:int(option_mat/dt)], r_sims[:,:int(option_mat/dt)], option_mat, bond_len, strike, hw_pchip.yield_curve, hw_pchip.alpha, hw_pchip.sigma) for option_mat in opt_maturities])
+plt.plot(opt_maturities,Our_Bond_Option_Prices, label = 'Our', color = 'blue')
+plt.plot(opt_maturities,MC_Bond_Option_Prices, label = 'MC', color = 'green')
+plt.plot(opt_maturities,[ql_hw_model.discountBondOption(call_put,strike,option_mat,option_mat+bond_len) for option_mat in opt_maturities], label = 'QuantLib', color = 'orange')
 plt.title("Bond Option Prices Comparison w.r.t. Option Maturities")
 plt.legend()
 plt.show()
@@ -195,35 +199,49 @@ plt.close()
 
 print("#--Benchmark of Jamshidian Swaption Prices--#")
 notional= 1
-swap_start = 5
+option_maturity = 5
+swap_length = 5
 frequency = 1
 fixed_rate = 0.04
 
 # Single Swaption price
 print("#--Example Swaption Price--#")
 print("#-- \n option maturity: {} \n swap length: {} \n fixed_strike: {:.2f}% \n --#".format(option_mat,bond_len, fixed_rate))
-our_sp = jamshidian_swaption_price(hw_pchip.discount_curve, swap_start, 5, fixed_rate, frequency, notional, hw_pchip.alpha, hw_pchip.sigma, True)
+our_sp = jamshidian_swaption_price(hw_pchip.yield_curve, option_maturity, swap_length, fixed_rate, frequency, notional, hw_pchip.alpha, hw_pchip.sigma, True)
 
 print("Our Swaption Price:")
 print(our_sp)
-swap = ql_create_swap(ql_spot_curve_handle, swap_start, 5, frequency, fixed_rate)
+swap = ql_create_swap(ql_spot_curve_handle, option_maturity, swap_length, frequency, fixed_rate)
 swaption = ql_create_swaption(swap, ql_hw_model, ql_spot_curve_handle)
 ql_sp = swaption.NPV()
 print("QuantLib Swaption Price:")
 print(ql_sp)
 print("Relative Difference: {:.2f}%".format((our_sp-ql_sp)/ql_sp*100))
 
+t_vec, r_t = hw_pchip.simulate_rate_paths(T = option_maturity, N_paths = 10000, dt = 0.0025)
+mc_sp = swaption_price_mc(t_vec, r_t,option_mat = option_maturity, swap_len = swap_length, swap_freq = frequency, strike_fixed_rate = fixed_rate,
+                  yield_curve = hw_pchip.yield_curve, alpha = hw_pchip.alpha, sigma = hw_pchip.sigma, is_payer=True)
+print("MC Bond Option Price:")
+print(mc_sp)
+print("Relative Difference Monte Carlo vs QuantLib: {:.2f}%".format((mc_sp-ql_sp)/ql_sp*100))
+
+
+
 # Plot of prices w.r.t. swap maturity
 swap_lenghts = np.arange(1,15)
-Our_Swaption_Prices = [jamshidian_swaption_price(hw_pchip.discount_curve, swap_start, swap_len, fixed_rate, frequency, notional, hw_pchip.alpha, hw_pchip.sigma, True) for swap_len in swap_lenghts]
+Our_Swaption_Prices = [jamshidian_swaption_price(hw_pchip.yield_curve, option_maturity, swap_len, fixed_rate, frequency, notional, hw_pchip.alpha, hw_pchip.sigma, True) for swap_len in swap_lenghts]
+
+MC_Swaption_Prices = np.array([swaption_price_mc(t_vec, r_t,option_mat = option_maturity, swap_len = swap_len, swap_freq = frequency, strike_fixed_rate = fixed_rate,
+                  yield_curve = hw_pchip.yield_curve, alpha = hw_pchip.alpha, sigma = hw_pchip.sigma, is_payer=True) for swap_len in swap_lenghts])
 
 ql_swaption_prices = []
 for swap_len in swap_lenghts:
-    swap = ql_create_swap(ql_spot_curve_handle, swap_start, int(swap_len), frequency, fixed_rate)
+    swap = ql_create_swap(ql_spot_curve_handle, option_maturity, int(swap_len), frequency, fixed_rate)
     swaption = ql_create_swaption(swap, ql_hw_model, ql_spot_curve_handle)
     ql_swaption_prices.append(swaption.NPV())
 
 plt.plot(swap_lenghts,Our_Swaption_Prices, label = 'Our', color = 'blue')
+plt.plot(swap_lenghts,MC_Swaption_Prices, label = 'Monte Carlo', color = 'green')
 plt.plot(swap_lenghts,ql_swaption_prices, label = 'QuantLib', color = 'orange')
 plt.title("Jamshidian Swaptions w.r.t. Swap Maturities")
 plt.legend()
@@ -233,15 +251,19 @@ plt.close()
 
 # Plot of prices w.r.t. option maturity
 option_maturities = np.arange(1,15)
-Our_Swaption_Prices = [jamshidian_swaption_price(hw_pchip.discount_curve, option_maturity, 5, fixed_rate, frequency, notional, hw_pchip.alpha, hw_pchip.sigma, True) for option_maturity in option_maturities]
+Our_Swaption_Prices = [jamshidian_swaption_price(hw_pchip.yield_curve, option_maturity, swap_length, fixed_rate, frequency, notional, hw_pchip.alpha, hw_pchip.sigma, True) for option_maturity in option_maturities]
+
+MC_Swaption_Prices = np.array([swaption_price_mc(time_vec[:int(option_maturity/dt)], r_sims[:,:int(option_maturity/dt)],option_mat = option_maturity, swap_len = swap_length, swap_freq = frequency, strike_fixed_rate = fixed_rate,
+                  yield_curve = hw_pchip.yield_curve, alpha = hw_pchip.alpha, sigma = hw_pchip.sigma, is_payer=True) for option_maturity in option_maturities])
 
 ql_swaption_prices = []
 for option_maturity in option_maturities:
-    swap = ql_create_swap(ql_spot_curve_handle, int(option_maturity), 5, frequency, fixed_rate)
+    swap = ql_create_swap(ql_spot_curve_handle, int(option_maturity), swap_length, frequency, fixed_rate)
     swaption = ql_create_swaption(swap, ql_hw_model, ql_spot_curve_handle)
     ql_swaption_prices.append(swaption.NPV())
 
 plt.plot(option_maturities,Our_Swaption_Prices, label = 'Our', color = 'blue')
+plt.plot(option_maturities,MC_Swaption_Prices, label = 'Monte', color = 'green')
 plt.plot(option_maturities,ql_swaption_prices, label = 'QuantLib', color = 'orange')
 plt.title("Jamshidian Swaptions w.r.t. Option Maturities")
 plt.legend()
@@ -251,7 +273,7 @@ plt.close()
 
 # Plot of prices w.r.t. strike
 strike_rates = np.arange(0.03,0.06,0.002)
-Our_Swaption_Prices = [jamshidian_swaption_price(hw_pchip.discount_curve, 5, 5, fixed_rate, frequency, notional, hw_pchip.alpha, hw_pchip.sigma, True) for fixed_rate in strike_rates]
+Our_Swaption_Prices = [jamshidian_swaption_price(hw_pchip.yield_curve, 5, 5, fixed_rate, frequency, notional, hw_pchip.alpha, hw_pchip.sigma, True) for fixed_rate in strike_rates]
 
 ql_swaption_prices = []
 for fixed_rate in strike_rates:
