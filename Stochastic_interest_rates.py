@@ -75,23 +75,34 @@ def bond_option_price_black_model(K,vol,opt_mat,bond_len,discount_curve):
     return discount_curve(opt_mat) * (F * scipy.stats.norm.cdf(d1) - K * scipy.stats.norm.cdf(d2))
 
 # r_t and alpha are used only if we want to use r_t not matching market
-def bond_price_HW1F(discount_curve, t, T, alpha, r_t = None):
+def bond_price_HW1F(yield_curve, t, T, alpha, sigma, r_t = None):
     """This function prices bond using Hull-White bond price formula: np.exp(A(t, T) - B(t, T) * r)"""
 
-    if r_t is None:
-        return discount_curve(T)/discount_curve(t)
+    discount_curve = lambda t: np.exp(-t * yield_curve(t))
 
     market_r_t = (discount_curve(t) / discount_curve(t + 0.0001) - 1) / 0.0001
+
+    if r_t is None:
+        r_t = market_r_t
 
     # A and B functions for Hull-White bond price formula
     B = (1 - np.exp(-alpha * (T - t))) / alpha
     A = np.log(discount_curve(T)/discount_curve(t)) + market_r_t * B
 
+    # Because Z(t) = exp(-r_t * t) then log(Z(t)) = -r_t * t
+    # dlog(Z(t))/dt = - t * r_t' - r_t
+    # d^2log(Z_star)/dt^2 =  -t * r_t'' - 2 * r_t'
+    # Start with assignment of dZ_star/dt and d^2Z_star/dt^2:
+    d_rate_dt = yield_curve.derivative(1)
+    dlogZ_dt = lambda t: -t * d_rate_dt(t) - yield_curve(t)
+
+    A = np.log(discount_curve(T) / discount_curve(t)) - B * dlogZ_dt(t) - 0.25*sigma**2/alpha**3*(np.exp(-alpha*T)-np.exp(-alpha*t))**2*(np.exp(2*alpha*t)-1)
+
     return np.exp(A - r_t * B)
 
-def bond_option_price_HW1F(K, opt_mat, bond_len, discount_curve, alpha, sigma, is_call = True,r_t = None):
-    p1 = bond_price_HW1F(discount_curve = discount_curve, t = 0, T = opt_mat, alpha = alpha, r_t = r_t)
-    p2 = bond_price_HW1F(discount_curve = discount_curve, t = 0, T = opt_mat + bond_len, alpha= alpha, r_t = r_t)
+def bond_option_price_HW1F(K, opt_mat, bond_len, yield_curve, alpha, sigma, is_call = True,r_t = None):
+    p1 = bond_price_HW1F(yield_curve = yield_curve, t = 0, T = opt_mat, alpha = alpha, sigma = sigma, r_t = r_t)
+    p2 = bond_price_HW1F(yield_curve = yield_curve, t = 0, T = opt_mat + bond_len, alpha= alpha, sigma = sigma, r_t = r_t)
 
     Sigma2 = sigma ** 2 / (2 * alpha ** 3) * (1 - np.exp(-2 * alpha * opt_mat)) * (1 - np.exp(-alpha * (bond_len))) ** 2
 
@@ -104,7 +115,7 @@ def bond_option_price_HW1F(K, opt_mat, bond_len, discount_curve, alpha, sigma, i
     else :
         return K * p1 * scipy.stats.norm.cdf(-d2) - p2 * scipy.stats.norm.cdf(-d1)
 
-def jamshidian_swaption_price(discount_curve, option_mat, swap_len, strike_fixed_rate, delta, notional, alpha, sigma,
+def jamshidian_swaption_price(yield_curve, option_mat, swap_len, strike_fixed_rate, delta, notional, alpha, sigma,
                               is_payer=False):
     #"""This function prices a European call option on a swap (in the Hull-White one-factor model) using so called Jamshidian trick."""
 
@@ -113,29 +124,29 @@ def jamshidian_swaption_price(discount_curve, option_mat, swap_len, strike_fixed
 
     # looking for r_star
     def mean_fit(r_star):
-        return (sum(bond_price_HW1F(discount_curve, option_mat, option_mat + np.arange(delta, swap_len + delta, delta), alpha,r_t=r_star)) * strike_fixed_rate * delta + bond_price_HW1F(discount_curve, option_mat,option_mat + swap_len, alpha,r_t=r_star) - 1) ** 2
+        return (sum(bond_price_HW1F(yield_curve, option_mat, option_mat + np.arange(delta, swap_len + delta, delta), alpha, sigma, r_t=r_star)) * strike_fixed_rate * delta + bond_price_HW1F(yield_curve, option_mat,option_mat + swap_len, alpha, sigma, r_t=r_star) - 1) ** 2
 
     # We need to pass "initial guess" value, so we take short forward rate at maturity
-    sol = scipy.optimize.minimize(mean_fit, 100 * (discount_curve(option_mat) / discount_curve(option_mat + 0.01) - 1))
+    sol = scipy.optimize.minimize(mean_fit, 100 * (np.exp(yield_curve(option_mat+0.01)-yield_curve(option_mat))- 1))
     r_star = sol.x[0]
 
-    K_i = bond_price_HW1F(discount_curve=discount_curve, r_t=r_star, t=option_mat, T=payment_times, alpha=alpha)
+    K_i = bond_price_HW1F(yield_curve=yield_curve, r_t=r_star, t=option_mat, T=payment_times, alpha=alpha, sigma=sigma)
 
     if is_payer:
         bond_call_prices = bond_option_price_HW1F(K=K_i, opt_mat=option_mat, bond_len=payment_times - option_mat,
-                                                  discount_curve=discount_curve, alpha=alpha, sigma=sigma,
+                                                  yield_curve=yield_curve, alpha=alpha, sigma=sigma,
                                                   is_call=False)
     else:
         bond_call_prices = bond_option_price_HW1F(K=K_i, opt_mat=option_mat, bond_len=payment_times - option_mat,
-                                                  discount_curve=discount_curve, alpha=alpha, sigma=sigma, is_call=True)
+                                                  yield_curve=yield_curve, alpha=alpha, sigma=sigma, is_call=True)
 
     return sum(delta * strike_fixed_rate * bond_call_prices) * notional + bond_call_prices[-1] * notional
   
 jamshidian_swaption_price = np.vectorize(jamshidian_swaption_price)
 
-def bond_option_price_mc(time_vec, r_sims, option_mat, bond_mat, strike, discount_curve, alpha, is_call = True):
+def bond_option_price_mc(time_vec, r_sims, option_mat, bond_mat, strike, yield_curve, alpha, sigma, is_call = True):
 
-    bond_price = bond_price_HW1F(discount_curve=discount_curve, t=option_mat, T=option_mat+bond_mat, alpha=alpha, r_t=r_sims[:, -1])
+    bond_price = bond_price_HW1F(yield_curve=yield_curve, t=option_mat, T=option_mat+bond_mat, alpha=alpha, sigma = sigma, r_t=r_sims[:, -1])
 
     if is_call:
         payoff = np.maximum(bond_price - strike, 0)
@@ -225,7 +236,7 @@ class hull_white_model:
         if is_swaptions_market_data:
             def mean_fit(params):
                 alpha, sigma = params
-                pred = jamshidian_swaption_price(self.discount_curve,options_market_data["Option_Maturity_Y"].values,
+                pred = jamshidian_swaption_price(self.yield_curve,options_market_data["Option_Maturity_Y"].values,
                                                  options_market_data["Swap_Length_Y"].values,options_market_data["Strike"].values,
                                                  options_market_data["Swap_Freq_Y"].values,1,alpha,sigma,True)
                 return 100*np.mean((pred - options_market_data["Price"]) ** 2)
@@ -235,7 +246,7 @@ class hull_white_model:
                 pred = bond_option_price_HW1F(K=options_market_data["Strike"].values,
                                               opt_mat=options_market_data["Option_Maturity_Y"].values,
                                               bond_len=options_market_data["Bond_Length_Y"].values,
-                                              discount_curve=self.discount_curve,
+                                              yield_curve=self.yield_curve,
                                               alpha=alpha, sigma=sigma)
                 return 100*np.mean((pred - options_market_data["Price"]) ** 2)
 
@@ -253,13 +264,13 @@ class hull_white_model:
         # Because Z(t) = exp(-r_t * t) then log(Z(t)) = -r_t * t
         # dlog(Z(t))/dt = - t * r_t' - r_t
         # d^2log(Z_star)/dt^2 =  -t * r_t'' - 2 * r_t'
-        rate = self.yield_curve
+
         # Start with assignment of dZ_star/dt and d^2Z_star/dt^2:
         d_rate_dt = self.yield_curve.derivative(1)
         d_rate_dt2 = self.yield_curve.derivative(2)
 
         # then derivatives of logarithms:
-        dlogZ_dt = lambda t: -t*d_rate_dt(t) - rate(t)
+        dlogZ_dt = lambda t: -t*d_rate_dt(t) - self.yield_curve(t)
         dlogZ_dt2 = lambda t: -t*d_rate_dt2(t) - 2*d_rate_dt(t)
 
         # and we can express theta using the derivatives and alpha + sigma parameters:
@@ -267,7 +278,7 @@ class hull_white_model:
            return -dlogZ_dt2(t) - alpha * dlogZ_dt(t) + 0.5 * sigma**2/alpha * (1 - np.exp(-2 * alpha * t))
 
         # Assign calibrated parameters
-        self.alpha, self.sigma, self.theta= alpha, sigma, theta
+        self.alpha, self.sigma, self.theta = alpha, sigma, theta
 
     def forward_rate(self,t1,t2):
         return (self.discount_curve(t1)/self.discount_curve(t2)-1)/(t2-t1)
@@ -289,7 +300,7 @@ class hull_white_model:
 
 
 def ql_create_swap(ytsh, swap_start: int = 2, swap_len: int = 2, frequency=0.25, fixed_rate=0.04,
-                   todays_date=ql.Date(18, 6, 2025), notional=1, r_0=0.042):
+                   todays_date=ql.Date(18, 6, 2025), notional=1, r_0=0.042, is_payer = True):
 
     day_count = ql.Thirty360(ql.Thirty360.BondBasis)
     start = todays_date + ql.Period(swap_start, ql.Years)
@@ -302,8 +313,12 @@ def ql_create_swap(ytsh, swap_start: int = 2, swap_len: int = 2, frequency=0.25,
 
     customIndex.addFixing(todays_date, r_0)
 
-    swap = ql.VanillaSwap(ql.VanillaSwap.Payer, notional, fix_schedule, fixed_rate, day_count,
-                          float_schedule, customIndex, 0, day_count)
+    if is_payer:
+        swap = ql.VanillaSwap(ql.VanillaSwap.Payer, notional, fix_schedule, fixed_rate, day_count,
+                              float_schedule, customIndex, 0, day_count)
+    else:
+        swap = ql.VanillaSwap(ql.VanillaSwap.Receiver, notional, fix_schedule, fixed_rate, day_count,
+                              float_schedule, customIndex, 0, day_count)
 
     swap.setPricingEngine(ql.DiscountingSwapEngine(ytsh))
 
@@ -318,3 +333,20 @@ def ql_create_swaption(ql_swap, ql_hull_white, ytsh):
 
 def bond_price_mc(time_vec, r_sims):
     return np.mean(np.exp(-scipy.integrate.trapezoid(r_sims, time_vec)))
+
+
+def swaption_price_mc(time_vec, r_sims, option_mat, swap_len, swap_freq, strike_fixed_rate, yield_curve, alpha, sigma, is_payer = True):
+    if is_payer:
+        payoff = lambda r_T: 1  - bond_price_HW1F(yield_curve, option_mat, option_mat + swap_len, alpha, sigma, r_t=r_T) \
+                             - sum(bond_price_HW1F(yield_curve, option_mat,
+                            option_mat + np.arange(swap_freq, swap_len + swap_freq, swap_freq),
+                            alpha, sigma, r_t=r_T)) * strike_fixed_rate * swap_freq
+    else:
+        payoff = lambda r_T: sum(bond_price_HW1F(yield_curve, option_mat, option_mat +
+                                np.arange(swap_freq, swap_len + swap_freq, swap_freq), alpha, sigma, r_t=r_T)) * strike_fixed_rate * swap_freq\
+                             + bond_price_HW1F(yield_curve, option_mat,option_mat + swap_len, alpha, sigma,r_t=r_T) - 1
+
+    payoff = np.vectorize(payoff)
+    payoffs = np.maximum(payoff(r_sims[:,-1]),0)
+
+    return np.mean(np.exp(-scipy.integrate.trapezoid(r_sims, time_vec))*payoffs)
