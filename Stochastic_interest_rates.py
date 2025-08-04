@@ -3,6 +3,10 @@ import numpy as np
 import scipy
 import QuantLib as ql
 
+# for multiprocessing
+from joblib import Parallel, delayed
+from functools import partial
+
 tenor_years_map = pd.DataFrame([["1M" , 1/12],
                                 ["1.5M", 0.125],
                                 ["2M", 1/6],
@@ -144,7 +148,7 @@ def jamshidian_swaption_price(yield_curve, option_mat, swap_len, strike_fixed_ra
   
 jamshidian_swaption_price = np.vectorize(jamshidian_swaption_price)
 
-def bond_option_price_mc(time_vec, r_sims, option_mat, bond_mat, strike, yield_curve, alpha, sigma, is_call = True):
+def bond_option_price_mc(time_vec: float | np.ndarray, r_sims: float | np.ndarray, option_mat: float, bond_mat: float, strike: float, yield_curve, alpha: float, sigma: float, is_call: bool = True) -> float | np.ndarray:
 
     bond_price = bond_price_HW1F(yield_curve=yield_curve, t=option_mat, T=option_mat+bond_mat, alpha=alpha, sigma = sigma, r_t=r_sims[:, -1])
 
@@ -222,7 +226,12 @@ class hull_white_model:
 
         # If calibration to swaptions is chosen
         if is_swaptions_market_data:
-            options_market_data["Price"] = swaption_price_black_model(options_market_data["Strike"],options_market_data["LogNormal_Vol"],options_market_data["Option_Maturity_Y"],options_market_data["Swap_Length_Y"],options_market_data["Swap_Freq_Y"],self.discount_curve)
+            options_market_data["Price"] = swaption_price_black_model(options_market_data["Strike"],
+                                                                      options_market_data["LogNormal_Vol"],
+                                                                      options_market_data["Option_Maturity_Y"],
+                                                                      options_market_data["Swap_Length_Y"],
+                                                                      options_market_data["Swap_Freq_Y"],
+                                                                      self.discount_curve)
 
         # If calibration to bond options is chosen
         else:
@@ -234,12 +243,25 @@ class hull_white_model:
 
         # 1-factor Hull White Model has three parameters to calibrate: function theta(t) and constants alpha and sigma.
         if is_swaptions_market_data:
+
             def mean_fit(params):
                 alpha, sigma = params
-                pred = jamshidian_swaption_price(self.yield_curve,options_market_data["Option_Maturity_Y"].values,
-                                                 options_market_data["Swap_Length_Y"].values,options_market_data["Strike"].values,
-                                                 options_market_data["Swap_Freq_Y"].values,1,alpha,sigma,True)
-                return 100*np.mean((pred - options_market_data["Price"]) ** 2)
+
+                # Parallel over each option instead of calling jamshidian for full arrays | n_jobs=-1 <=> use all cores
+                prices = Parallel(n_jobs=-1)(
+                    delayed(jamshidian_swaption_price)(
+                        self.yield_curve,
+                        [maturity], [swap_len], [strike], [freq], 1, alpha, sigma, True
+                    )
+                    for maturity, swap_len, strike, freq
+                    in zip(options_market_data["Option_Maturity_Y"].values,
+                           options_market_data["Swap_Length_Y"].values,
+                           options_market_data["Strike"].values,
+                           options_market_data["Swap_Freq_Y"].values)
+                )
+
+                pred = np.array(prices).flatten()
+                return 100 * np.mean((pred - options_market_data["Price"].values) ** 2)
         else:
             def mean_fit(params):
                 alpha, sigma = params
@@ -251,7 +273,8 @@ class hull_white_model:
                 return 100*np.mean((pred - options_market_data["Price"]) ** 2)
 
         # We need to pass "initial guess" values.
-        fitted_params = scipy.optimize.minimize(mean_fit,np.array([0.05,0.05]), bounds=[(0.01,0.20),(0.01,0.20)])
+        fitted_params = scipy.optimize.minimize(mean_fit, np.array([0.05,0.05]), bounds=[(0.01,0.20),(0.01,0.20)])
+
         print("Calibration Finished with mean price diff: {:.4f}%".format(fitted_params.fun))
         alpha, sigma = fitted_params.x[0], fitted_params.x[1]
 
