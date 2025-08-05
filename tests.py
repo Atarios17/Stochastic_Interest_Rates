@@ -184,9 +184,12 @@ plt.waitforbuttonpress()
 plt.close()
 
 # Plot of bond option prices w.r.t. option maturity
-opt_maturities = np.arange(0.25,15,0.25)
+option_maturity = 15
+opt_maturities = np.array(np.arange(0.25, option_maturity, 0.25))
+t_vec, r_t = hw_pchip.simulate_rate_paths(T = option_maturity, N_paths = 10000, dt = 0.0025)
+
 Our_Bond_Option_Prices = bond_option_price_HW1F(strike,opt_maturities,bond_len,hw_pchip.yield_curve, hw_pchip.alpha, hw_pchip.sigma)
-MC_Bond_Option_Prices = np.array([bond_option_price_mc(time_vec[:int(option_mat/dt)], r_sims[:,:int(option_mat/dt)], option_mat, bond_len, strike, hw_pchip.yield_curve, hw_pchip.alpha, hw_pchip.sigma) for option_mat in opt_maturities])
+MC_Bond_Option_Prices = np.array([bond_option_price_mc(time_vec[:int(opt_mat/dt)], r_sims[:,:int(opt_mat/dt)], opt_mat, bond_len, strike, hw_pchip.yield_curve, hw_pchip.alpha, hw_pchip.sigma) for opt_mat in opt_maturities])
 plt.plot(opt_maturities,Our_Bond_Option_Prices, label = 'Our', color = 'blue')
 plt.plot(opt_maturities,MC_Bond_Option_Prices, label = 'MC', color = 'green')
 plt.plot(opt_maturities,[ql_hw_model.discountBondOption(call_put,strike,option_mat,option_mat+bond_len) for option_mat in opt_maturities], label = 'QuantLib', color = 'orange')
@@ -219,9 +222,9 @@ print(ql_sp)
 print("Relative Difference: {:.2f}%".format((our_sp-ql_sp)/ql_sp*100))
 
 t_vec, r_t = hw_pchip.simulate_rate_paths(T = option_maturity, N_paths = 10000, dt = 0.0025)
-mc_sp = swaption_price_mc(t_vec, r_t,option_mat = option_maturity, swap_len = swap_length, swap_freq = frequency, strike_fixed_rate = fixed_rate,
+mc_sp = swaption_price_mc(t_vec, r_t, option_mat = option_maturity, swap_len = swap_length, swap_freq = frequency, strike_fixed_rate = fixed_rate,
                   yield_curve = hw_pchip.yield_curve, alpha = hw_pchip.alpha, sigma = hw_pchip.sigma, is_payer=True)
-print("MC Bond Option Price:")
+print("MC Swap Option Price:")
 print(mc_sp)
 print("Relative Difference Monte Carlo vs QuantLib: {:.2f}%".format((mc_sp-ql_sp)/ql_sp*100))
 
