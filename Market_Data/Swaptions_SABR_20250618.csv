@@ -1,4 +1,4 @@
-Option_Maturity,Swap_Length,Strike,Swap_Freq,Strike_to_ATM,LogNormal_Vol
+Option_Maturity,Swap_tenor,Strike,Swap_Freq,Strike_to_ATM,LogNormal_Vol
 3M,1Y,3.487236043,3M,-50bp,32.38
 3M,1Y,3.737236043,3M,-25bp,24.02
 3M,1Y,3.937236043,3M,-5bp,23
