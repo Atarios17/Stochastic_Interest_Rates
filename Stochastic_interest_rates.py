@@ -31,7 +31,7 @@ def read_swaptions_market_data(path: str) -> pd.DataFrame:
 
     swaptions_md['Swap_Freq_Y'] = translate_tenors(swaptions_md['Swap_Freq'].values)
 
-    # Change format of Strikes and Vols so they are in decimals instead of percentage points
+    # Change format of strikes and vols, so they are in decimals instead of percentage points
     swaptions_md['Strike'] = swaptions_md['Strike'] * 0.01
     swaptions_md['LogNormal_Vol'] = swaptions_md['LogNormal_Vol'] * 0.01
 
@@ -42,7 +42,7 @@ def read_swaptions_market_data(path: str) -> pd.DataFrame:
 
 
 def swaption_price_black_model(K: float, vol: float, opt_mat: float, swap_tenor: float,
-                               swap_freq: float, discount_curve: callable) -> float:
+                               swap_freq: float, discount_curve: callable) -> float | np.ndarray:
     """The function calculates swaption price with Black Formula"""
 
     A = swap_freq*np.sum(np.array([discount_curve(opt_mat+t)/discount_curve(opt_mat)
@@ -67,7 +67,7 @@ def read_bond_options_market_data(path: str) -> pd.DataFrame:
 
     bond_options_md['Bond_tenor_Y'] = translate_tenors(bond_options_md['Bond_tenor'].values)
 
-    # Change format of Strikes and Vols so they are in decimals instead of percentage points
+    # Change format of strikes and vols, so they are in decimals instead of percentage points
     bond_options_md['Strike'] = bond_options_md['Strike'] * 0.01
     bond_options_md['LogNormal_Vol'] = bond_options_md['LogNormal_Vol'] * 0.01
 
@@ -81,23 +81,23 @@ def bond_option_price_black_model(K: float, vol: float, opt_mat: float,
     F = discount_curve(opt_mat+bond_tenor)/discount_curve(opt_mat)
     d1 = (np.log(F/K) + vol**2 * 0.5 * opt_mat) / np.sqrt(vol * np.sqrt(opt_mat))
     d2 = d1 - vol * np.sqrt(opt_mat)
+
     return discount_curve(opt_mat) * (F * scipy.stats.norm.cdf(d1) - K * scipy.stats.norm.cdf(d2))
 
 
 # r_t and alpha are used only if we want to use r_t not matching market
-def bond_price_HW1F(yield_curve: callable, t: float, T: float, alpha: float, sigma: float, r_t: float = None) -> float:
+def bond_price_HW1F(yield_curve: callable, t: float | np.ndarray, T: float | np.ndarray, alpha: float,
+                    sigma: float, r_t: float = None) -> float | np.ndarray:
     """This function prices bond using Hull-White bond price formula: np.exp(A(t, T) - B(t, T) * r)"""
 
     discount_curve = lambda t: np.exp(-t * yield_curve(t))
 
     market_r_t = (discount_curve(t) / discount_curve(t + 0.0001) - 1) / 0.0001
-
     if r_t is None:
         r_t = market_r_t
 
     # A and B functions for Hull-White bond price formula
     B = (1 - np.exp(-alpha * (T - t))) / alpha
-    A = np.log(discount_curve(T)/discount_curve(t)) + market_r_t * B
 
     # Because Z(t) = exp(-r_t * t) then log(Z(t)) = -r_t * t
     # dlog(Z(t))/dt = - t * r_t' - r_t
@@ -112,8 +112,9 @@ def bond_price_HW1F(yield_curve: callable, t: float, T: float, alpha: float, sig
     return np.exp(A - r_t * B)
 
 
-def bond_option_price_HW1F(K: float, opt_mat: float, bond_tenor: float, yield_curve: callable,
-                           alpha: float, sigma: float, is_call: bool = True, r_t: float = None) -> float:
+def bond_option_price_HW1F(K: float | np.ndarray, opt_mat: float | np.ndarray, bond_tenor: float | np.ndarray,
+                           yield_curve: callable, alpha: float, sigma: float, is_call: bool = True,
+                           r_t: float = None) -> float:
     """The function calculates bond option price for Hull White Model"""
 
     p1 = bond_price_HW1F(yield_curve = yield_curve, t = 0, T = opt_mat, alpha = alpha, sigma = sigma, r_t = r_t)
@@ -174,6 +175,8 @@ class HullWhiteModel:
         self.theta = None
 
     def read_market_data(self, market_data_path: str) -> None:
+        """This function reads rates market data and adjusts its format to number of years and decimals."""
+
         # We assume market rates are in format of two columns table:
         # col 1 should be named "Tenor" and should contain Tenor name contained in tenors-years mapping.
         # col 2 should be named "Rate" and should contain rate in % points. For example 4.53 means 4.53%.
@@ -283,8 +286,6 @@ class HullWhiteModel:
 
         # We need to pass "initial guess" values.
         fitted_params = scipy.optimize.minimize(mean_fit, np.array([0.05,0.05]), bounds=[(0.01,0.20),(0.01,0.20)])
-
-        print("Calibration Finished with mean price diff: {:.4f}".format(fitted_params.fun))
         alpha, sigma = fitted_params.x[0], fitted_params.x[1]
 
         # Theta function is calibrated by making model's bond prices equal market bond prices
@@ -313,9 +314,13 @@ class HullWhiteModel:
         self.alpha, self.sigma, self.theta = alpha, sigma, theta
 
     def forward_rate(self, t1: float, t2 : float) -> float:
+        """Funtion that calculates forward rate between time t1 and t2"""
+
         return (self.discount_curve(t1)/self.discount_curve(t2)-1)/(t2-t1)
 
     def simulate_rate_paths(self, T: float, N_paths: int, dt: float = 0.0025) -> tuple:
+        """Funtion that generates Hull-White short rate paths simulations"""
+
         n_steps = int(T / dt)
         time_vec = np.linspace(0, T, n_steps + 1)
 
@@ -334,6 +339,7 @@ class HullWhiteModel:
 def ql_create_swap(ytsh, swap_start: int = 2, swap_tenor: int = 2, frequency: float = 0.25, fixed_rate: float = 0.04,
                    todays_date: ql.Date = ql.Date(18, 6, 2025), notional: float = 1.0, r_0: float = 0.042,
                    is_payer: bool = True) -> ql.VanillaSwap:
+    """Function that creates quantlib swap object"""
 
     day_count = ql.Thirty360(ql.Thirty360.BondBasis)
     start = todays_date + ql.Period(swap_start, ql.Years)
@@ -359,6 +365,8 @@ def ql_create_swap(ytsh, swap_start: int = 2, swap_tenor: int = 2, frequency: fl
 
 def ql_create_swaption(ql_swap: ql.VanillaSwap, ql_hull_white: ql.HullWhite,
                        ytsh: ql.YieldTermStructureHandle) -> ql.Swaption:
+    """Function that creates quantlib swaption object with jamshidian pricing engine set"""
+
     exercise = ql.EuropeanExercise(ql_swap.startDate())
     swaption = ql.Swaption(ql_swap, exercise)
     jamshidian_engine = ql.JamshidianSwaptionEngine(ql_hull_white, ytsh)
@@ -366,14 +374,17 @@ def ql_create_swaption(ql_swap: ql.VanillaSwap, ql_hull_white: ql.HullWhite,
     return swaption
 
 def bond_price_mc(time_vec: np.array, r_sims: pd.DataFrame) -> np.array:
+    """Function that calculates Hull-White bond prices from Monte Carlo simulations"""
+
     return np.mean(np.exp(-scipy.integrate.trapezoid(r_sims, time_vec)))
 
 
 def bond_option_price_mc(time_vec: float | np.ndarray, r_sims: float | np.ndarray, option_mat: float,
-                         bond_mat: float, strike: float, yield_curve, alpha: float, sigma: float,
+                         bond_tenor: float, strike: float, yield_curve: callable, alpha: float, sigma: float,
                          is_call: bool = True) -> float | np.ndarray:
+    """Function that calculates Hull-White bond option prices from Monte Carlo simulations"""
 
-    bond_price = bond_price_HW1F(yield_curve=yield_curve, t=option_mat, T=option_mat+bond_mat,
+    bond_price = bond_price_HW1F(yield_curve=yield_curve, t=option_mat, T=option_mat+bond_tenor,
                                  alpha=alpha, sigma = sigma, r_t=r_sims[:, -1])
 
     if is_call:
@@ -381,27 +392,28 @@ def bond_option_price_mc(time_vec: float | np.ndarray, r_sims: float | np.ndarra
     else:
         payoff = np.maximum(strike - bond_price, 0)
 
-    return np.mean(np.exp(-scipy.integrate.trapezoid(r_sims, time_vec)) * payoff)
+    return np.mean(np.exp(-scipy.integrate.trapezoid(r_sims, time_vec, axis = 1)) * payoff)
 
 
 def swaption_price_mc(time_vec: np.array, r_sims: pd.DataFrame, option_mat: float, swap_tenor: float, swap_freq: float,
-                      strike_fixed_rate: float, yield_curve: float, alpha: float, sigma: float,
-                      is_payer: bool = True) -> float:
+                      strike_fixed_rate: float, yield_curve: callable, alpha: float, sigma: float,
+                      is_payer: bool = True) -> float | np.ndarray:
+    """Function that calculates Hull-White swaption prices from Monte Carlo simulations"""
+
     if is_payer:
-        def payoff(r_T: float) -> float:
+        def payoff(r_T: float | np.ndarray) -> float | np.ndarray:
             return 1  - bond_price_HW1F(yield_curve, option_mat, option_mat + swap_tenor, alpha, sigma, r_t=r_T) \
                    - sum(bond_price_HW1F(yield_curve, option_mat,
                    option_mat + np.arange(swap_freq, swap_tenor + swap_freq, swap_freq),
                    alpha, sigma, r_t=r_T)) * strike_fixed_rate * swap_freq
     else:
-        def payoff(r_T: float) -> float:
+        def payoff(r_T: float | np.ndarray) -> float | np.ndarray:
             return sum(bond_price_HW1F(yield_curve, option_mat, option_mat +
                    np.arange(swap_freq, swap_tenor + swap_freq, swap_freq), alpha, sigma, r_t=r_T)) * \
                    strike_fixed_rate * swap_freq + \
                    bond_price_HW1F(yield_curve, option_mat,option_mat + swap_tenor, alpha, sigma,r_t=r_T) - 1
 
     payoff = np.vectorize(payoff)
-    payoffs = np.maximum(payoff(r_sims[:,-1]),0)
+    payoffs = np.maximum(payoff(r_T = r_sims[:,-1]), 0)
 
     return np.mean(np.exp(-scipy.integrate.trapezoid(r_sims, time_vec))*payoffs)
-
